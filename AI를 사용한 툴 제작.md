@@ -20,4 +20,4 @@
 
 2. 추가적으로 수정이 필요한 질문에도 꼭 문항을 나누어 정확하게 지적을 하였더니 내가 목적으로 하는 툴에 가까워 졌다.
 3. 코드 완성 후 개별적인 튜닝을 통해 완성도를 높혔다.
-
+[링크](https://github.com/rokMkiaz/GunBooster_TeamRocket_iwnam_summary/blob/main/Coroutine.md)
