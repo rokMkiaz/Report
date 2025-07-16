@@ -11,12 +11,11 @@
 
 #### 2. 문항을 통한 유도
 
-<img width="556" height="719" alt="image" src="https://github.com/user-attachments/assets/eb06143e-a568-4d81-a54a-bf5eef4d904e" />
-
+<img width="556" height="719" alt="image" src="https://github.com/user-attachments/assets/eb06143e-a568-4d81-a54a-bf5eef4d904e" />\
 1. 최초 질문에 타겟 언어를 개발성과 유지보수를 생각 C#으로 지목하였다. 
 2. 문항을 통해 내가 질문하고 싶은 점들을 정확하게 지정하여 나열해 보았다.
 
-<img width="541" height="648" alt="image" src="https://github.com/user-attachments/assets/3c257908-6d55-40cf-a358-164cc8117381" />
+<img width="541" height="648" alt="image" src="https://github.com/user-attachments/assets/3c257908-6d55-40cf-a358-164cc8117381" />\
 2. 추가적으로 수정이 필요한 질문에도 꼭 문항을 나누어 정확하게 지적을 하였더니 내가 목적으로 하는 툴에 가까워 졌다.
 3. 코드 완성 후 개별적인 튜닝을 통해 완성도를 높혔다.
 
