@@ -1,0 +1,7 @@
+C:\Users\gnidev0101\source\repos\ConnectTool\ConnnectTool2\bin\Debug\ConnnectTool2.exe.config
+C:\Users\gnidev0101\source\repos\ConnectTool\ConnnectTool2\bin\Debug\ConnnectTool2.exe
+C:\Users\gnidev0101\source\repos\ConnectTool\ConnnectTool2\bin\Debug\ConnnectTool2.pdb
+C:\Users\gnidev0101\source\repos\ConnectTool\ConnnectTool2\obj\Debug\ConnnectTool2.csproj.AssemblyReference.cache
+C:\Users\gnidev0101\source\repos\ConnectTool\ConnnectTool2\obj\Debug\ConnnectTool2.csproj.CoreCompileInputs.cache
+C:\Users\gnidev0101\source\repos\ConnectTool\ConnnectTool2\obj\Debug\ConnnectTool2.exe
+C:\Users\gnidev0101\source\repos\ConnectTool\ConnnectTool2\obj\Debug\ConnnectTool2.pdb
