@@ -1,0 +1,7 @@
+C:\Users\gnidev0101\source\repos\ConnectTool\PercentCheckTool\bin\Debug\PercentCheckTool.exe.config
+C:\Users\gnidev0101\source\repos\ConnectTool\PercentCheckTool\bin\Debug\PercentCheckTool.exe
+C:\Users\gnidev0101\source\repos\ConnectTool\PercentCheckTool\bin\Debug\PercentCheckTool.pdb
+C:\Users\gnidev0101\source\repos\ConnectTool\PercentCheckTool\obj\Debug\PercentCheckTool.csproj.AssemblyReference.cache
+C:\Users\gnidev0101\source\repos\ConnectTool\PercentCheckTool\obj\Debug\PercentCheckTool.csproj.CoreCompileInputs.cache
+C:\Users\gnidev0101\source\repos\ConnectTool\PercentCheckTool\obj\Debug\PercentCheckTool.exe
+C:\Users\gnidev0101\source\repos\ConnectTool\PercentCheckTool\obj\Debug\PercentCheckTool.pdb
