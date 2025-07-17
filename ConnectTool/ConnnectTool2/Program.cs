@@ -50,7 +50,15 @@ namespace ConnnectTool2
         {
             foreach (var cfg in servers.Values)
             {
-                var srcName = cfg.Name;
+                string srcName;
+                if (cfg.SubName != null)
+                {
+                    srcName = cfg.SubName;
+                }
+                else
+                {
+                    srcName = cfg.Name;
+                }
                 var srcType = Regex.Replace(srcName, @"\d+$", "");
 
 
@@ -168,7 +176,8 @@ namespace ConnnectTool2
                 "; - 기본 규칙(GroupNumber)을 사용하려면 GroupNumber만 입력(100 이하 숫자)",
                 "; -직접 포트를 지정하려면 GroupNumber 대신 'X'를 쓰고 Port에 숫자 입력",
                 "; -서버이름과 연결할 서버이름을 비교하므로, COMMON_HEADER에 선언된 이름과 맞추는게 좋음",
-                "$SERVER:SERVER_NAME",
+                "; -기존 문서 그대로 복사 붙혀넣기하기 좋도록 해둠. 포트,그룹넘버만 조심하면 됨.",
+                "$SERVER:SERVER_Title#SERVER_NAME",
                 "; LisOrConn Soc Comment LocalIP ConnectIP [GroupNumber] Port RecvBuf SendBuf ReadQ SendQueue ",
                 "1 0 TOOL1 SERVER_NAME:LOCAL OTHER:LOCAL 5 1024 1024 0 0",
                 "1 1 TOOL2 SERVER_NAME:LOCAL OTHER:LOCAL X 65000 160000 160000 60000000 60000000",
@@ -195,7 +204,7 @@ namespace ConnnectTool2
                 commonHeader.Add(lines[idx]);
             }
             
-
+            //아직 만들다 만 기능임..
             idx = Array.IndexOf(lines, "SERVER_LIST");
             var serverNames = new List<string>();
 
@@ -230,8 +239,26 @@ namespace ConnnectTool2
                 var raw = lines[i].Trim();
                 if (!raw.StartsWith("$SERVER:")) continue;
                 if (current != null) configs.Add(current);
-                var name = raw.Substring(8).Trim();
-                current = new ServerConfig { Name = name };
+                //var name = raw.Substring(8).Trim();
+               current = new ServerConfig { };
+
+                var load = raw.Substring("$SERVER:".Length).Trim();
+                string name, subName = null;
+
+                var hashPos = load.IndexOf('#');
+                if (hashPos >= 0)
+                {
+                    name = load.Substring(0, hashPos).Trim();
+                    subName = load.Substring(hashPos + 1).Trim();
+                    current.Name = name;
+                    current.SubName = subName;
+                }
+                else
+                {
+                    name = load;
+                    current.Name = name;
+                    current.SubName = null;
+                }
 
                 for (int j = i + 1; j < lines.Length; j++)
                 {

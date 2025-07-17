@@ -9,6 +9,7 @@ namespace ConnnectTool2
     class ServerConfig
     {
         public string Name { get; set; }
+        public string SubName { get; set; }
         public List<Connection> Connections { get; } = new List<Connection>();
     }
 
