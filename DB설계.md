@@ -8,6 +8,11 @@
 
 #### 1-1. 기존 Server내 Tvp호출을 위한 구조 개선
 그동안 Row, Param으로만 호출되던 구조를 개선하는것이 목표다.
+```ruby
+require 'redcarpet'
+markdown = Redcarpet.new("Hello World!")
+puts markdown.to_html
+```
 
 #### 1-2. 효율적이며 적합한 쿼리문 제작
 MERGE를 활용한 일괄적인 관리
