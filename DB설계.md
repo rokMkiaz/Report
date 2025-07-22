@@ -137,7 +137,7 @@ bool CStoredProcedure::Execute(void* pParam, void* pRowset)
 
 기나긴 대화 끝에 결론은 구버전 라이브러리를 사용중이어서 생긴 문제였다. 기존 코드를 업데이트가 불가능한 상황이라, 다른 방법을 찾아봐야 했다.
 #### 1-2. 효율적이며 적합한 쿼리문 제작
-MERGE,Type를 활용한 일괄적인 관리
+MERGE,Type를 활용한 일괄적인 관리를 지향하였으나, 상단의 문제로 사용을 못 하게 되었다..
 ```ruby
 -- 1) 먼저 TVP 형식 정의
 CREATE TYPE dbo.InventoryItemType AS TABLE(
