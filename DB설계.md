@@ -137,4 +137,45 @@ bool CStoredProcedure::Execute(void* pParam, void* pRowset)
 
 기나긴 대화 끝에 결론은 구버전 라이브러리를 사용중이어서 생긴 문제였다. 기존 코드를 업데이트가 불가능한 상황이라, 다른 방법을 찾아봐야 했다.
 #### 1-2. 효율적이며 적합한 쿼리문 제작
-MERGE를 활용한 일괄적인 관리
+MERGE,Type를 활용한 일괄적인 관리
+```ruby
+-- 1) 먼저 TVP 형식 정의
+CREATE TYPE dbo.InventoryItemType AS TABLE(
+  ItemUnique BIGINT,
+  Slot       INT,
+  ItemIndex  INT,
+  Option1    INT,
+  Option2    INT
+  /*…*/
+);
+GO
+
+-- 2) MERGE 기반 프로시저
+CREATE PROCEDURE dbo.usp_SaveInventory
+  @CharUnique INT,
+  @Items      dbo.InventoryItemType READONLY
+AS
+BEGIN
+  SET NOCOUNT ON;
+  BEGIN TRAN;
+
+  MERGE INTO TInventoryItem AS target
+  USING @Items        AS src
+    ON target.ItemUnique = src.ItemUnique
+  WHEN MATCHED AND target.CharUnique = @CharUnique
+    THEN UPDATE
+      SET Slot      = src.Slot
+        , ItemIndex = src.ItemIndex
+        , Option1   = src.Option1
+        , Option2   = src.Option2
+        , ModifiedAt= SYSUTCDATETIME()
+  WHEN NOT MATCHED BY TARGET
+    THEN INSERT(ItemUnique, CharUnique, Slot, ItemIndex, Option1, Option2, CreatedAt, ModifiedAt)
+         VALUES(src.ItemUnique, @CharUnique, src.Slot, src.ItemIndex, src.Option1, src.Option2, SYSUTCDATETIME(), SYSUTCDATETIME())
+  WHEN NOT MATCHED BY SOURCE 
+       AND target.CharUnique = @CharUnique
+    THEN DELETE  -- 슬롯에서 빠진(삭제된) 아이템 제거
+
+  COMMIT;
+END;
+```
