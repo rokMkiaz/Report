@@ -16,8 +16,82 @@
 1. 최초 질문에 타겟 언어를 개발성과 유지보수를 생각 C#으로 지목하였다. 
 2. 문항을 통해 내가 질문하고 싶은 점들을 정확하게 지정하여 나열해 보았다.
 <details>
-<summary>접기/펼치기</summary>
+<summary>코드/펼치기</summary>
+/'''
+  using System;
+using System.Linq;
 
+namespace ProbabilityChecker
+{
+    class Program
+    {
+        static void Main(string[] args)
+        {
+            Console.WriteLine("확률들을 콤마(,)로 구분하여 입력하세요 (예: 0.2,0.5,0.3):");
+            var input = Console.ReadLine();
+
+            // 입력 파싱
+            var tokens = input?
+                .Split(new[] {','}, StringSplitOptions.RemoveEmptyEntries)
+                .Select(t => {
+                    if (double.TryParse(t.Trim(), out var v)) return v;
+                    throw new FormatException($"잘못된 숫자 형식: '{t}'");
+                })
+                .ToArray();
+
+            if (tokens == null || tokens.Length == 0)
+            {
+                Console.WriteLine("확률을 하나 이상 입력해야 합니다.");
+                return;
+            }
+
+            // 검사
+            if (IsValidDistribution(tokens, out double sum, out int badIndex))
+            {
+                Console.WriteLine($"유효한 확률 분포입니다. 합 = {sum:F6}");
+            }
+            else
+            {
+                if (badIndex >= 0)
+                    Console.WriteLine($"확률값 오류: 인덱스 {badIndex}의 값 {tokens[badIndex]}가 [0,1] 범위를 벗어났습니다.");
+                else
+                    Console.WriteLine($"합계 오류: 확률의 합이 1이 아닙니다. 합 = {sum:F6}");
+            }
+        }
+
+        /// <summary>
+        /// 확률 분포 유효성 검사
+        /// </summary>
+        /// <param name="probs">확률 배열</param>
+        /// <param name="sum">합계 반환값</param>
+        /// <param name="badIndex">잘못된 개별 확률의 인덱스 (-1 이면 합계 문제)</param>
+        /// <param name="epsilon">합계 오차 한계(기본 1e-6)</param>
+        static bool IsValidDistribution(double[] probs, out double sum, out int badIndex, double epsilon = 1e-6)
+        {
+            // 1) 0 ≤ p ≤ 1 검사
+            for (int i = 0; i < probs.Length; i++)
+            {
+                if (probs[i] < 0.0 || probs[i] > 1.0)
+                {
+                    sum = probs.Sum();
+                    badIndex = i;
+                    return false;
+                }
+            }
+
+            // 2) 합이 1에 근접한지 검사
+            sum = probs.Sum();
+            badIndex = -1;
+            if (Math.Abs(sum - 1.0) > epsilon)
+                return false;
+
+            return true;
+        }
+    }
+}
+
+  /'''
+  
 <!-- summary 아래 한칸 공백 두어야함 -->
 ## 접은 제목
 접은 내용
