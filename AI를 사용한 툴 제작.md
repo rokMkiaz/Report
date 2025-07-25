@@ -89,8 +89,7 @@ namespace ProbabilityChecker
         }
     }
 }
-
-  /'''
+'''
   
 <!-- summary 아래 한칸 공백 두어야함 -->
 ## 접은 제목
