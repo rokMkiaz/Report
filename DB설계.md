@@ -186,3 +186,70 @@ END;
 #### 2-1. 코드 구현
 기존 데이터를 Json형태로 입력가능하게 바꿔주는 부분이 필요해 졌다. 해당부분 역시 AI를 활용해 컨테이너의 형태로 만드는게 사용하기 쉬워 보였다.
 ```ruby
+
+// -----------------------------------------------------------------------------
+// 1) JsonFields<T> primary template: 기본적으로 비어있으므로, 특수화하지 않은 T에 대해서는
+//    컴파일 에러가 발생하도록 됩니다.
+// -----------------------------------------------------------------------------
+template<typename T>
+struct JsonFields {
+    // 반드시 T타입에 대해 아래 메서드를 특수화해 주세요!
+    static void AppendFields(const T& /*obj*/, wstringstream& /*ss*/) {
+        static_assert(sizeof(T) == 0,
+            "JsonFields<T> must be specialized for your type T");
+    }
+};
+
+//-----------------------------------------------------------------------------
+// 2) BuildJson 
+//    - Type 은 iterator_traits 로 자동 유추
+//    - itemFmt, item._i64unique 등 이전 파라미터는 전혀 필요 없습니다.
+//-----------------------------------------------------------------------------   
+template<typename T>
+wstring BuildJson(const vector<T>& rows, string pProcName, INT32 KeyVal1, INT32 KeyVal2) {
+    wstringstream ss;
+    ss.clear();
+    ss << L"[";
+    bool firstRow = true;
+
+    for (auto const& r : rows) {
+        if (!firstRow) ss << L",";
+        firstRow = false;
+        ss << L"{";
+        JsonFields<T>::AppendFields(r, ss);
+        ss << L"}";
+    }
+
+    ss << L"]";
+
+    if (ss.str().size() >= MAX_JSON_LEN) {
+        // 길이 제한 체크 - 에러 로그를 파일로 출력
+        char exePath[MAX_PATH];
+        GetModuleFileNameA(NULL, exePath, MAX_PATH);
+        char* lastSlash = strrchr(exePath, '\\');
+        if (lastSlash) *(lastSlash + 1) = '\0';
+        
+        char logPath[MAX_PATH];
+        sprintf(logPath, "%sJsonErrorLog\\json_error_log_%s_%d_%d.txt", exePath, pProcName.c_str(), KeyVal1, KeyVal2);
+        
+        // 디렉토리 생성
+        char dirPath[MAX_PATH];
+        sprintf(dirPath, "%sJsonErrorLog", exePath);
+        CreateDirectoryA(dirPath, NULL);
+        
+        FILE* errorFile = fopen(logPath, "a");
+        if (errorFile) {
+            fprintf(errorFile, "[%s] MAX_JSONSTRING_ERROR::SAVE_FAILED - JSON size: %zu, MAX_JSON_LEN: %d\n", 
+                    __TIMESTAMP__, ss.str().size(), MAX_JSON_LEN);
+            fprintf(errorFile, "JSON Content:\n%ls\n\n", ss.str().c_str());
+            fclose(errorFile);
+        }
+        printf("MAX_JSONSTRING_ERROR::SAVE_FAILED\n");
+        return L"";
+    }
+    return ss.str();
+}
+
+```
+- 초기구조에 추가적으로 Json을 만들다 실패할 시 문서로 만드는 로직을 추가
+- 글자 수는 최대 2만자로 제한, 데이터는 1회 50개의 RowData를 입력가능하게 조정.
