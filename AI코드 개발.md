@@ -18,3 +18,109 @@ L 사용결과 여러가지 의견을 제시하고 동의 여하에 따라 코�
 
 ### 3.응용 및 적용
 
+DB개발을 지속하며 코드들이 불필요하게 반복이 되는것이 느겨졋다. 해당 부분들을 클로드 코드로 템플릿화 시켜보앗다.
+<details>
+<summary>기존코드</summary>
+
+  
+```ruby
+//창고
+	{
+		INT32 i32dx = 0;
+		vector<_PROCEDURE_SAVE_STORAGE_ROW> buffer;
+		CProcedure_Save_Storage* pSaveStorage = CProcedure_Save_Storage::GetInstance();
+		_PROCEDURE_SAVE_STORAGE_PARAM* pstorageparams = new _PROCEDURE_SAVE_STORAGE_PARAM();
+		buffer.reserve(JSON_CHUNK_SIZE_50);
+
+		while (i32dx < MAX_CHANNEL_COMMON_STORAGE_COUNT) {
+
+			memset(pstorageparams, 0, sizeof(_PROCEDURE_SAVE_STORAGE_PARAM));
+			INT32 i32taken = 0;
+			buffer.clear();
+
+			// 50개 단위로 Push
+			while (i32taken < JSON_CHUNK_SIZE_50 && i32dx < MAX_CHANNEL_COMMON_STORAGE_COUNT) {
+
+				_PROCEDURE_SAVE_STORAGE_ROW row;
+				memset(&row, 0x00, sizeof(_PROCEDURE_SAVE_STORAGE_ROW));
+				row.i32Slot = i32dx;
+				memcpy(&row.info, &pMsg->stStorageInfo[i32dx], sizeof(ItemInfo));
+				buffer.push_back(row);
+				++i32taken;
+				++i32dx;
+			}
+			if (buffer.empty()) continue;
+
+			// Build JSON and prepare parameters
+			wstring json = BuildJson(buffer,"storage", pMsg->m_dwAccUnique, i32dx);
+			pstorageparams->dwAccunique = pMsg->m_dwAccUnique;
+
+			memcpy(pstorageparams->wcJson, json.c_str(), (json.size() + 1) * sizeof(WCHAR));
+
+			// Execute and release
+			if (!pSaveStorage->Execute(pstorageparams, nullptr))
+			{
+				printf("CProcedure_Save_Storage::Execute() Failed.\n");
+			}
+			pSaveStorage->ReleaseDBRecords();
+		}
+		delete pstorageparams;
+		pstorageparams = NULL;
+	}
+```
+</details>
+
+
+
+<details>
+<summary>기존코드</summary>
+
+작성된 템플릿은 아래 코드와 갓다.
+```ruby
+template<typename ProcedureType, typename ParamType,  typename RowType >
+void SaveDataInChunks(DWORD dwCharunique, DWORD dwAccunique, INT32 maxCount, INT32 chunkSize, const char* jsonTypeName,
+	/*데이터 저장조건*/function<bool(RowType&, INT32)>dataProcessor,
+	/*마지막 파람에 넣을 조건*/function<void(ParamType*, const wstring&, DWORD, DWORD)> dataParam)
+{
+	INT32 index = 0;
+	vector<RowType> buffer;
+	ProcedureType* procedure = ProcedureType::GetInstance();
+	ParamType* params = new ParamType();
+	buffer.reserve(chunkSize);
+
+	while (index < maxCount) {
+		memset(params, 0, sizeof(ParamType));
+		INT32 taken = 0;
+		buffer.clear();
+
+		// 청크 단위로 처리
+		while (taken < chunkSize && index < maxCount) {
+			RowType row;
+			memset(&row, 0x00, sizeof(RowType));
+
+			// 사용자 정의 데이터 처리 로직
+			if (dataProcessor(row, index)) {
+				buffer.push_back(row);
+			}
+			++taken;
+			++index;
+		}
+
+		if (buffer.empty()) continue;
+
+		// JSON 빌드 및 실행
+		wstring json = BuildJson(buffer, jsonTypeName, dwAccunique, index);
+
+		// 사용자 정의 파라미터 설정 로직
+		dataParam(params, json, dwCharunique, dwAccunique);
+
+		if (!procedure->Execute(params, nullptr)) {
+			printf("%s::Execute() Failed.\n",typeid(ProcedureType).name());
+		}
+		procedure->ReleaseDBRecords();
+	}
+
+	delete params;
+}
+
+```
