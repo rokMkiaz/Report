@@ -68,12 +68,9 @@ DB개발을 지속하며 코드들이 불필요하게 반복이 되는것이 느
 		pstorageparams = NULL;
 	}
 ```
+
 </details>
 
-
-
-<details>
-<summary>기존코드</summary>
 
 작성된 템플릿은 아래 코드와 갓다.
 ```ruby
