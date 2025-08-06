@@ -144,4 +144,4 @@ void SaveDataInChunks(DWORD dwCharunique, DWORD dwAccunique, INT32 maxCount, INT
 				}
 				);
 ```
-식으로 코드의 가독성이 증가한다.
+중복되는 코드를 처리하는데 있어 실수를 줄일 수 있다.
