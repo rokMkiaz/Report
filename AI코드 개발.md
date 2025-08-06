@@ -17,7 +17,26 @@ SuperClaude의 가장 획기적인 기능은 "일반적인 AI" 문제에 대한 
 L 사용결과 여러가지 의견을 제시하고 동의 여하에 따라 코드의 질이 상승하였다.
 
 ### 3.응용 및 적용
+#### 3.1 밸런스 인포 추출
+서버에 하드코딩된 계산식들을 도식화가 필요하였다. 해당 계산식이 있는 부분에 대하여 추출을 요청해 보았다.
+<details>
+<summary>입력 사진</summary>
 
+<img width="774" height="657" alt="image" src="https://github.com/user-attachments/assets/cba23a6e-751d-4031-a7cc-d9713f9605dc" />
+<img width="725" height="597" alt="image" src="https://github.com/user-attachments/assets/0363be38-40cd-4d63-9e9a-01d7b9e7567c" />
+
+</details>
+자료입력은 위와 같이 하였고,
+
+<details>
+<summary>출력 사진</summary>
+<img width="757" height="741" alt="image" src="https://github.com/user-attachments/assets/030704a6-8743-4fa0-9cd6-675e21900cf2" />
+<img width="1373" height="685" alt="image" src="https://github.com/user-attachments/assets/a0e66b8d-aef7-4e6a-a8b3-7777100161b0" />
+
+ <details>
+초기에 내부 변수명으로 출력이 되어있어, 요청하는 사항에 맞춰서 손을 보고 마무리를 하였다. 
+
+#### 3.2 중복 코드 템플릿화
 DB개발을 지속하며 코드들이 불필요하게 반복이 되는것이 느겨졋다. 해당 부분들을 클로드 코드로 템플릿화 시켜보앗다.
 <details>
 <summary>기존코드</summary>
