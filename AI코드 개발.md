@@ -102,7 +102,7 @@ while문, GetInstance, 동적할당 등 프로시저를 호출할 대 중복되�
 
 
 
-* 클로드코드를 활용한 함수 템플릿
+* 클로드코드를 활용한 함수 템플릿 작성
 ```ruby
 template<typename ProcedureType, typename ParamType,  typename RowType >
 void SaveDataInChunks(DWORD dwCharunique, DWORD dwAccunique, INT32 maxCount, INT32 chunkSize, const char* jsonTypeName,
