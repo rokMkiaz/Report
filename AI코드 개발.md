@@ -47,7 +47,6 @@ L 사용결과 여러가지 의견을 제시하고 동의 여하에 따라 코�
 #### 3.2 중복 코드 템플릿화
 DB개발을 지속하며 코드들이 불필요하게 반복이 되는것이 느껴졌다. 해당 부분들을 클로드 코드로 템플릿화 시켜보았다.
 <details>
-	
 <summary>기존코드</summary>
 
   
@@ -103,7 +102,7 @@ while문, GetInstance, 동적할당 등 프로시저를 호출할 대 중복되�
 
 
 작성된 템플릿은 아래 코드와 같은데, function을 사용해 개별적으로 다른 부분을 반영하고 다른 로직은 동일하게 처리하는 것이었다.
-<summary>함수화 템플릿</summary>
+* 함수화 템플릿
 ```ruby
 template<typename ProcedureType, typename ParamType,  typename RowType >
 void SaveDataInChunks(DWORD dwCharunique, DWORD dwAccunique, INT32 maxCount, INT32 chunkSize, const char* jsonTypeName,
