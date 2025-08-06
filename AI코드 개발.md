@@ -154,7 +154,7 @@ void SaveDataInChunks(DWORD dwCharunique, DWORD dwAccunique, INT32 maxCount, INT
 이렇게 템플릿화가 성공한 코드를 스타일에 맞게 처리하면 중복되는 코드를 호출 및 처리하는데 있어 실수를 줄일 수 있다.
 ```ruby
 //창고
-				SaveDataInChunks<CProcedure_Save_Storage, _PROCEDURE_SAVE_STORAGE_PARAM, _PROCEDURE_SAVE_STORAGE_ROW >
+                 SaveDataInChunks<CProcedure_Save_Storage, _PROCEDURE_SAVE_STORAGE_PARAM, _PROCEDURE_SAVE_STORAGE_ROW >
 			(0, pMsg->m_dwAccUnique, MAX_CHANNEL_COMMON_STORAGE_COUNT, JSON_CHUNK_SIZE_50, "Avatar",
 				[&](_PROCEDURE_SAVE_STORAGE_ROW& row, INT32 index) -> bool {
 					//초기화
