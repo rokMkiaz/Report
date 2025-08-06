@@ -33,7 +33,7 @@ L 사용결과 여러가지 의견을 제시하고 동의 여하에 따라 코�
 <img width="757" height="741" alt="image" src="https://github.com/user-attachments/assets/030704a6-8743-4fa0-9cd6-675e21900cf2" />
 <img width="1373" height="685" alt="image" src="https://github.com/user-attachments/assets/a0e66b8d-aef7-4e6a-a8b3-7777100161b0" />
 
- <details>
+</details>
 초기에 내부 변수명으로 출력이 되어있어, 요청하는 사항에 맞춰서 손을 보고 마무리를 하였다. 
 
 #### 3.2 중복 코드 템플릿화
