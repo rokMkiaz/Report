@@ -74,7 +74,7 @@ while문, GetInstance, 동적할당 등 프로시저를 호출할 대 중복되�
 </details>
 
 
-작성된 템플릿은 아래 코드와 갓다.
+작성된 템플릿은 아래 코드와 같은데, function을 사용해 개별적으로 다른 부분을 반영하고 다른 로직은 동일하게 처리하는 것이었다.
 ```ruby
 template<typename ProcedureType, typename ParamType,  typename RowType >
 void SaveDataInChunks(DWORD dwCharunique, DWORD dwAccunique, INT32 maxCount, INT32 chunkSize, const char* jsonTypeName,
@@ -123,3 +123,25 @@ void SaveDataInChunks(DWORD dwCharunique, DWORD dwAccunique, INT32 maxCount, INT
 }
 
 ```
+
+이렇게 템플릿화를 성공한 코드를 처리하면 
+```ruby
+//창고
+				SaveDataInChunks<CProcedure_Save_Storage, _PROCEDURE_SAVE_STORAGE_PARAM, _PROCEDURE_SAVE_STORAGE_ROW >
+			(0, pMsg->m_dwAccUnique, MAX_CHANNEL_COMMON_STORAGE_COUNT, JSON_CHUNK_SIZE_50, "Avatar",
+				[&](auto& row, INT32 index) -> bool {
+					//초기화
+					row.i32Slot = index;
+					memcpy(&row.info, &pMsg->stStorageInfo[index], sizeof(ItemInfo));
+
+
+					return true;  // 버퍼에 추가
+				},
+				[&](_PROCEDURE_SAVE_STORAGE_PARAM* params, const wstring& json) -> void {
+					params->dwAccunique = pMsg->m_dwAccUnique;  
+
+					memcpy(params->wcJson, json.c_str(), (json.size() + 1) * sizeof(WCHAR));
+				}
+				);
+```
+식으로 변환이 가능하다.
