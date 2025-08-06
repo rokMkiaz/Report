@@ -124,12 +124,12 @@ void SaveDataInChunks(DWORD dwCharunique, DWORD dwAccunique, INT32 maxCount, INT
 
 ```
 
-이렇게 템플릿화를 성공한 코드를 처리하면 
+이렇게 템플릿화가 성공한 코드를 스타일에 맞게 처리하면 
 ```ruby
 //창고
 				SaveDataInChunks<CProcedure_Save_Storage, _PROCEDURE_SAVE_STORAGE_PARAM, _PROCEDURE_SAVE_STORAGE_ROW >
 			(0, pMsg->m_dwAccUnique, MAX_CHANNEL_COMMON_STORAGE_COUNT, JSON_CHUNK_SIZE_50, "Avatar",
-				[&](auto& row, INT32 index) -> bool {
+				[&](_PROCEDURE_SAVE_STORAGE_ROW& row, INT32 index) -> bool {
 					//초기화
 					row.i32Slot = index;
 					memcpy(&row.info, &pMsg->stStorageInfo[index], sizeof(ItemInfo));
@@ -144,4 +144,4 @@ void SaveDataInChunks(DWORD dwCharunique, DWORD dwAccunique, INT32 maxCount, INT
 				}
 				);
 ```
-식으로 변환이 가능하다.
+식으로 코드의 가독성이 증가한다.
