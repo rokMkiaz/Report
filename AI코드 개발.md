@@ -45,7 +45,7 @@ L 사용결과 여러가지 의견을 제시하고 동의 여하에 따라 코�
 초기에 내부 변수명으로 출력이 되어있어, 요청하는 사항에 맞춰서 손을 보고 마무리를 하였다. 
 
 #### 3.2 중복 코드 템플릿화
-DB개발을 지속하며 코드들이 불필요하게 반복이 되는것이 느겨졋다. 해당 부분들을 클로드 코드로 템플릿화 시켜보앗다.
+DB개발을 지속하며 코드들이 불필요하게 반복이 되는것이 느껴졌다. 해당 부분들을 클로드 코드로 템플릿화 시켜보았다.
 <details>
 <summary>기존코드</summary>
 
@@ -95,7 +95,7 @@ DB개발을 지속하며 코드들이 불필요하게 반복이 되는것이 느
 		pstorageparams = NULL;
 	}
 ```
-while문, GetInstance, 동적할당 등 프로시저를 호출할 대 중복되는 부분들이 굉장히 많이 보인다. 중간중간 값입력부분만 함수화해서 넣어주면 사용하기 좋아질 것으로 보엿다.
+while문, GetInstance, 동적할당 등 프로시저를 호출할 대 중복되는 부분들이 굉장히 많이 보인다. 중간중간 값입력부분만 함수화해서 넣어주면 사용하기 좋아질 것으로 보였다.
 
 
 </details>
@@ -151,7 +151,7 @@ void SaveDataInChunks(DWORD dwCharunique, DWORD dwAccunique, INT32 maxCount, INT
 
 ```
 
-이렇게 템플릿화가 성공한 코드를 스타일에 맞게 처리하면 
+이렇게 템플릿화가 성공한 코드를 스타일에 맞게 처리하면 중복되는 코드를 호출 및 처리하는데 있어 실수를 줄일 수 있다.
 ```ruby
 //창고
 				SaveDataInChunks<CProcedure_Save_Storage, _PROCEDURE_SAVE_STORAGE_PARAM, _PROCEDURE_SAVE_STORAGE_ROW >
@@ -171,4 +171,4 @@ void SaveDataInChunks(DWORD dwCharunique, DWORD dwAccunique, INT32 maxCount, INT
 				}
 				);
 ```
-중복되는 코드를 처리하는데 있어 실수를 줄일 수 있다.
+
