@@ -101,8 +101,8 @@ while문, GetInstance, 동적할당 등 프로시저를 호출할 대 중복되�
 </details>
 
 
-작성된 템플릿은 아래 코드와 같은데, function을 사용해 개별적으로 다른 부분을 반영하고 다른 로직은 동일하게 처리하는 것이었다.
-* 함수화 템플릿
+
+* 클로드코드를 활용한 함수 템플릿
 ```ruby
 template<typename ProcedureType, typename ParamType,  typename RowType >
 void SaveDataInChunks(DWORD dwCharunique, DWORD dwAccunique, INT32 maxCount, INT32 chunkSize, const char* jsonTypeName,
@@ -151,9 +151,8 @@ void SaveDataInChunks(DWORD dwCharunique, DWORD dwAccunique, INT32 maxCount, INT
 }
 
 ```
+중복되는 부분들은 전부 묶었으며, 함수 포인터를 사용해 개별적으로 다른 부분을 반영할 수 있게 작성되었다.
 
-
-이렇게 템플릿화가 성공한 코드를 스타일에 맞게 처리하면 중복되는 코드를 호출 및 처리하는데 있어 실수를 줄일 수 있다.
 * 기존 코드 적용사례
 ```ruby
 //창고
@@ -174,4 +173,4 @@ void SaveDataInChunks(DWORD dwCharunique, DWORD dwAccunique, INT32 maxCount, INT
 				}
 				);
 ```
-
+코드의 가독성이 증가하였고, 템플릿화된 코드내에서 동적할당,해제가 되어 안전성이 증가했다.
