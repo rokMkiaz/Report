@@ -102,6 +102,7 @@ while문, GetInstance, 동적할당 등 프로시저를 호출할 대 중복되�
 
 
 작성된 템플릿은 아래 코드와 같은데, function을 사용해 개별적으로 다른 부분을 반영하고 다른 로직은 동일하게 처리하는 것이었다.
+<summary>함수화 템플릿</summary>
 ```ruby
 template<typename ProcedureType, typename ParamType,  typename RowType >
 void SaveDataInChunks(DWORD dwCharunique, DWORD dwAccunique, INT32 maxCount, INT32 chunkSize, const char* jsonTypeName,
@@ -151,7 +152,9 @@ void SaveDataInChunks(DWORD dwCharunique, DWORD dwAccunique, INT32 maxCount, INT
 
 ```
 
+
 이렇게 템플릿화가 성공한 코드를 스타일에 맞게 처리하면 중복되는 코드를 호출 및 처리하는데 있어 실수를 줄일 수 있다.
+<summary>기존 코드 적용사례</summary>
 ```ruby
 //창고
                  SaveDataInChunks<CProcedure_Save_Storage, _PROCEDURE_SAVE_STORAGE_PARAM, _PROCEDURE_SAVE_STORAGE_ROW >
