@@ -174,3 +174,7 @@ void SaveDataInChunks(DWORD dwCharunique, DWORD dwAccunique, INT32 maxCount, INT
 				);
 ```
 코드의 가독성이 증가하였고, 템플릿화된 코드내에서 동적할당,해제가 되어 안전성이 증가했다.
+
+
+#### 3.3 DB테이블 바이너리 해체 작업
+복잡도가 높은 바이너리구조체에 대한 해체 작업을 진행해 보았다.
