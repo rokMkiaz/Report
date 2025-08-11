@@ -177,7 +177,7 @@ void SaveDataInChunks(DWORD dwCharunique, DWORD dwAccunique, INT32 maxCount, INT
 
 
 #### 3.3 DB테이블 바이너리 해체 작업
-<img width="579" height="616" alt="image" src="https://github.com/user-attachments/assets/97eff88d-2077-4337-bf38-e6370dc43b97" />
+<img width="579" height="616" alt="image" src="https://github.com/user-attachments/assets/97eff88d-2077-4337-bf38-e6370dc43b97" /> \
 복잡도가 높은 바이너리구조체에 대한 해체 작업을 진행해 보았다. 초기에는 복잡한 쿼리구조를 추천하였으나, 기존의 지식과 GPT가 알려준 방식을 통해 테이블을 3개로 나누어 제시를 해봤더니 칭찬과 더불어 오타사항을 알려주었다. 완성된 코드에 대해 검토 기능 역시 좋은 방향인듯 하다.
 
 
