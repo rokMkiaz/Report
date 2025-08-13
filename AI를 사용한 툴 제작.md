@@ -727,3 +727,82 @@ namespace CsvGroupProbabilityChecker
 
 완성된 코드에서는 간단한 파일명 입력, 그룹선택, 전체적인 중복인덱스를 검사할 수 있는 기능을 추가했으며, 출력파일들을 보기 좋게 수정하였다.
 <img width="1101" height="665" alt="image" src="https://github.com/user-attachments/assets/ad62fac3-e3d1-452b-a944-0832a07fd46f" />
+
+### 3.자동 SVN 업데이트 툴
+테스트 서버에서 문서파일 교체에 대해 자동으로 SVN업데이트, Data Convert, ServerStart가 가능하도록 bat파일을 만들어 보았다.
+
+<details>
+<summary>코드/펼치기</summary>
+
+```ruby
+::경로 저장
+for %%I in ("%~dp0..") do set "PARENT=%%~fI"
+
+::KillServer
+start "KillServer"/b "%PARENT%/Run64\KillServer.bat" 
+timeout -t 5 /nobreak
+
+::이전 버전과 비교를 위한 MAP 폴더 백업 생성
+set ORIGINAL_MAP=%PARENT%\Run64\_Data\MAP
+set BACKUP_MAP=%PARENT%\Run64\MAP_backup
+robocopy "%ORIGINAL_MAP%" "%BACKUP_MAP%" /E /COPY:DAT
+
+::CleanUp
+ CD C:\Program Files\TortoiseSVN\bin\
+ START TortoiseProc.exe /command:cleanup /cleanup /noui /breaklocks /revert /fixtimestaps /vacuum /path:"%PARENT%/Run64\_Data\" /closeonend:0
+ 
+ timeout -t 3 /nobreak
+ 
+ 
+::CleanUp 상태의 현재 MAP 폴더 복사본 생성
+set COMPARE_REVISION=%PARENT%\Run64\MAP_compare
+robocopy "%ORIGINAL_MAP%" "%COMPARE_REVISION%" /E /COPY:DAT
+
+
+::Update
+START TortoiseProc.exe /command:update /path:"%PARENT%/Run64\_Data" /closeonend:1
+
+timeout -t 5 /nobreak
+
+
+::Update 내역 있는지 비교
+robocopy %ORIGINAL_MAP% %COMPARE_REVISION% /L /NFL /NDL /NJH /NJS
+if %errorlevel% equ 0 (
+    echo MAP NO UPDATED.
+	robocopy "%BACKUP_MAP%" "%ORIGINAL_MAP%" /E /COPY:DAT
+	timeout -t 1 /nobreak
+) else (
+    echo MAP UPDATED. CONVERT TOOL EXCUTE!
+	start /wait "DataConvert" "%PARENT%/Run64/DataConvertTool\DataConvertTool.exe" 
+    echo CONVERT TOOL COMPLETE!
+	timeout -t 1 /nobreak
+)
+::비교 폴더 삭제
+rmdir /s /q "%BACKUP_MAP%"
+rmdir /s /q "%COMPARE_REVISION%"
+
+::실행
+ start "" 	 cmd /c	"%PARENT%\Run64\Game\server_Game.exe"
+ ::start "" 	 cmd /c	"%PARENT%\Run64\Game12\server_Game.exe"
+ start "" 	 cmd /c	"%PARENT%\Run64\AccountDB\server_AccountDB.exe"
+ start "" 	 cmd /c	"%PARENT%\Run64\CashDB\server_CashDB.exe"
+ ::start "" 	 cmd /c	"%PARENT%\Run64\GameDB\server_GameDB.exe"
+ ::start "" 	 cmd /c	"%PARENT%\Run64\GameDB12\server_GameDB.exe"
+ start "" 	 cmd /c	"%PARENT%\Run64\Gate\server_Gate.exe"
+ start "" 	 cmd /c	"%PARENT%\Run64\Login\server_Login.exe"
+ start "" 	 cmd /c	"%PARENT%\Run64\TradeDB\server_TradeDB.exe"
+ ::start "" 	 cmd /c	"%PARENT%\Run64\TradeDB10\server_TradeDB.exe"
+ ::start "" 	 cmd /c	"%PARENT%\Run64\Game10(World)\server_Game.exe"
+ ::start "" 	 cmd /c	"%PARENT%\Run64\WorldDB10\server_GameDB.exe"
+ ::start "" 	 cmd /c	"%PARENT%\Run64\Union\server_Game.exe"
+ ::start "" 	 cmd /c	"%PARENT%\Run64\UnionDB\server_GameDB.exe"
+:: start "" 	 cmd /c	"%PARENT%\Run64\ServerMoveDB\server_ServerMoveDB.exe"
+
+goto 1
+
+exit /b
+
+
+```
+
+</details>
