@@ -253,3 +253,103 @@ wstring BuildJson(const vector<T>& rows, string pProcName, INT32 KeyVal1, INT32 
 ```
 - 초기구조에 추가적으로 Json을 만들다 실패할 시 문서로 만드는 로직을 추가
 - 글자 수는 최대 2만자로 제한, 데이터는 1회 50개의 RowData를 입력가능하게 조정.
+
+```ruby
+ALTER PROCEDURE [dbo].[gp_save_pc_inventory]
+       @CharUnique INT,
+       @JsonItems  NVARCHAR(MAX)
+   AS
+   BEGIN
+       SET NOCOUNT ON;
+       BEGIN TRANSACTION;
+
+       -- Parse JSON array into rows
+       MERGE dbo.TInventory AS target
+       USING (
+           SELECT
+               JSON_VALUE(value, '$.a')  AS Inventoryslot,
+               JSON_VALUE(value, '$.b')  AS ItemUnique,
+               JSON_VALUE(value, '$.c')  AS ItemIndex,
+               JSON_VALUE(value, '$.d')  AS lock,
+               JSON_VALUE(value, '$.e' ) AS Identity1,
+               JSON_VALUE(value, '$.f')  AS Identity2,
+               JSON_VALUE(value, '$.g')  AS Identity3,
+               JSON_VALUE(value, '$.h')  AS ItemCount,
+               JSON_VALUE(value, '$.i')  AS BoundType,
+               JSON_VALUE(value, '$.j')  AS Hitrate,
+               JSON_VALUE(value, '$.k')  AS ItemDurability,
+               JSON_VALUE(value, '$.l')  AS Elemental,
+               JSON_VALUE(value, '$.n')  AS ElementalVal,
+               JSON_VALUE(value, '$.m')  AS Enchant,
+               JSON_VALUE(value, '$.o')  AS Reforge,
+               JSON_VALUE(value, '$.p')  AS Quality,
+               JSON_VALUE(value, '$.q')  AS DelTimeStamp
+           FROM OPENJSON(@JsonItems)
+       ) AS src
+         ON target.CharUnique    = @CharUnique
+        AND target.Inventoryslot = src.Inventoryslot
+       WHEN MATCHED THEN
+         UPDATE SET
+           target.Item_Unique = src.ItemUnique,
+           target.Item_Index  = src.ItemIndex,
+           target.[Item_Identity1]    = src.Identity1 ,
+        target.[Item_Identity2]    = src.Identity2  ,
+        target.[Item_Identity3]    = src.Identity3  ,
+        target.[Item_Count]			= src.ItemCount,
+        target.[Item_BoundType]		= src.BoundType,
+        target.[Item_Elemental]      = src.Elemental,
+        target.[Item_Elemental_Value]= src.ElementalVal,
+        target.[Item_HitRate]		= src.Hitrate,
+        target.[Item_Lock]			= src.lock,
+        target.[Item_Durabillity]	= src.ItemDurability,
+        target.[Item_Enachant]		= src.Enchant,
+        target.[Item_Reforge]		= src.Reforge,
+           target.[Item_Quality]     = src.Quality,
+        target.[Item_DelTimeStamp]   = src.DelTimeStamp
+
+
+       WHEN NOT MATCHED BY TARGET THEN
+         INSERT (CharUnique,
+         Inventoryslot,
+         Item_Unique, 
+         Item_Index,
+         [Item_Identity1],
+         [Item_Identity2],
+         [Item_Identity3],
+         [Item_Count],
+         [Item_BoundType],
+         [Item_Elemental],
+         [Item_Elemental_Value],
+         [Item_HitRate],
+         [Item_Lock],
+         [Item_Durabillity],
+         [Item_Enachant],
+         [Item_Reforge],
+         [Item_Quality],
+         [Item_DelTimeStamp])
+         VALUES (@CharUnique, 
+         src.Inventoryslot,
+         src.ItemUnique,
+         src.ItemIndex,
+         src.Identity1,
+         src.Identity2,
+         src.Identity3,
+         src.ItemCount,
+         src.BoundType,
+         src.Elemental,
+         src.ElementalVal,
+         src.Hitrate,
+         src.lock,
+         src.ItemDurability,
+         src.Enchant,
+         src.Reforge,
+         src.Quality,
+         src.DelTimeStamp);
+
+       COMMIT;
+   END;
+```
+<img width="1524" height="372" alt="image" src="https://github.com/user-attachments/assets/befdb93c-6b80-4278-aac0-7419dc3a6df4" />\
+
+- SaveInventory의 예시이다. upsert를 활용하여 데이터의 유실을 최소화 하엿고, Json입력을 통해 테이블의 형식으로 데이터를 주고 받는다.
+- 저장속도 측정은 3500만의 데이터가 잇을 경우 랜덤한 옵션값 + 1~500 칸을 업데이트하는데 80ms의 속도가 나왓다.
