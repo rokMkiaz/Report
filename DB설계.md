@@ -349,7 +349,7 @@ ALTER PROCEDURE [dbo].[gp_save_pc_inventory]
        COMMIT;
    END;
 ```
-<img width="1524" height="372" alt="image" src="https://github.com/user-attachments/assets/befdb93c-6b80-4278-aac0-7419dc3a6df4" />\
+<img width="1524" height="372" alt="image" src="https://github.com/user-attachments/assets/befdb93c-6b80-4278-aac0-7419dc3a6df4" />
 
 - SaveInventory의 예시이다. upsert를 활용하여 데이터의 유실을 최소화 하엿고, Json입력을 통해 테이블의 형식으로 데이터를 주고 받는다.
 - 저장속도 측정은 3500만의 데이터가 잇을 경우 랜덤한 옵션값 + 1~500 칸을 업데이트하는데 80ms의 속도가 나왓다.
