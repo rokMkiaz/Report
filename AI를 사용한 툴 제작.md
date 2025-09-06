@@ -729,7 +729,7 @@ namespace CsvGroupProbabilityChecker
 <img width="1101" height="665" alt="image" src="https://github.com/user-attachments/assets/ad62fac3-e3d1-452b-a944-0832a07fd46f" />
 
 ### 3.자동 SVN 업데이트 툴
-테스트 서버에서 문서파일 교체에 대해 자동으로 SVN업데이트, Data Convert, ServerStart가 가능하도록 bat파일을 만들어 보았다.
+테스트 서버에서 문서파일 교체에 대해 자동으로 SVN업데이트, Data Convert, ServerStart가 가능하도록 bat파일을 만들어 보았다. 해당 bat파일을 실행할 수 있도록 이름과 경로를 지정하였다.
 
 <details>
 <summary>코드/펼치기</summary>
@@ -781,7 +781,7 @@ if %errorlevel% equ 0 (
 rmdir /s /q "%BACKUP_MAP%"
 rmdir /s /q "%COMPARE_REVISION%"
 
-::실행
+::실행 - 경로 자동화 추가
  start "" 	 cmd /c	"%PARENT%\Run64\Game\server_Game.exe"
  ::start "" 	 cmd /c	"%PARENT%\Run64\Game12\server_Game.exe"
  start "" 	 cmd /c	"%PARENT%\Run64\AccountDB\server_AccountDB.exe"
