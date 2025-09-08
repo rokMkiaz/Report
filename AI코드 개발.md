@@ -185,6 +185,181 @@ void SaveDataInChunks(DWORD dwCharunique, DWORD dwAccunique, INT32 maxCount, INT
 #### 3.4 길찾기 로직 최적화
 클로드 코드를 활용하여 기존 로직에서 성능을 더 높일 수 없는지 한번 검토해 보았더니 대략 60%정도 더 상향이될 수 있는 부분을 찾았다고 한다. 해당 부분을 수정하여 테스트를 해서 서버의 부하를 더 줄여 보는 것으로 적용을 해보았는데, 어느 정도 테스트가 필요해 보인다.
 ```ruby
+// Binary Heap 구현
+Astar::NodeHeap::NodeHeap(int capacity) {
+	m_capacity = capacity;
+	m_size = 0;
+	m_heap = new Node*[capacity];
+}
+
+Astar::NodeHeap::~NodeHeap() {
+	delete[] m_heap;
+}
+
+void Astar::NodeHeap::Push(Node* node) {
+	if (m_size >= m_capacity) return;
+	
+	m_heap[m_size] = node;
+	HeapifyUp(m_size);
+	m_size++;
+}
+
+Astar::Node* Astar::NodeHeap::Pop() {
+	if (m_size == 0) return NULL;
+	
+	Node* result = m_heap[0];
+	m_heap[0] = m_heap[--m_size];
+	HeapifyDown(0);
+	return result;
+}
+
+void Astar::NodeHeap::HeapifyUp(int index) {
+	while (index > 0) {
+		int parentIdx = Parent(index);
+		if (m_heap[parentIdx]->F <= m_heap[index]->F) break;
+		
+		Node* temp = m_heap[parentIdx];
+		m_heap[parentIdx] = m_heap[index];
+		m_heap[index] = temp;
+		index = parentIdx;
+	}
+}
+
+void Astar::NodeHeap::HeapifyDown(int index) {
+	while (LeftChild(index) < m_size) {
+		int smallest = index;
+		int left = LeftChild(index);
+		int right = RightChild(index);
+		
+		if (left < m_size && m_heap[left]->F < m_heap[smallest]->F)
+			smallest = left;
+		if (right < m_size && m_heap[right]->F < m_heap[smallest]->F)
+			smallest = right;
+			
+		if (smallest == index) break;
+		
+		Node* temp = m_heap[index];
+		m_heap[index] = m_heap[smallest];
+		m_heap[smallest] = temp;
+		index = smallest;
+	}
+}
+
+// 메모리 풀 구현
+Astar::NodePool::NodePool(int poolSize) {
+	m_poolSize = poolSize;
+	m_freeCount = poolSize;
+	m_pNodes = new Node[poolSize];
+	m_pFreeIndices = new int[poolSize];
+	
+	// 모든 인덱스를 자유 목록에 추가
+	for (int i = 0; i < poolSize; i++) {
+		m_pFreeIndices[i] = i;
+	}
+}
+
+Astar::NodePool::~NodePool() {
+	delete[] m_pNodes;
+	delete[] m_pFreeIndices;
+}
+
+Astar::Node* Astar::NodePool::AllocNode() {
+	if (m_freeCount == 0) return NULL;
+	
+	int index = m_pFreeIndices[--m_freeCount];
+	return &m_pNodes[index];
+}
+
+void Astar::NodePool::FreeNode(Node* node) {
+	if (m_freeCount >= m_poolSize) return;
+	
+	int index = node - m_pNodes;
+	if (index >= 0 && index < m_poolSize) {
+		m_pFreeIndices[m_freeCount++] = index;
+	}
+}
+
+void Astar::NodePool::Reset() {
+	m_freeCount = m_poolSize;
+	for (int i = 0; i < m_poolSize; i++) {
+		m_pFreeIndices[i] = i;
+	}
+}
+
+
+void CFindPath::CompressPath() {
+	if (m_iPathSize < 2) {
+		m_iCompressedSize = 0;
+		return;
+	}
+	
+	m_iCompressedSize = 0;
+	
+	// 첫 번째 세그먼트 시작
+	DWORD startPos = m_pPathData[0].dwPos;
+	int currentDirection = -1;
+	int segmentLength = 1;
+	
+	for (int i = 1; i < m_iPathSize; i++) {
+		// 현재와 이전 위치에서 방향 계산
+		DWORD prevPos = m_pPathData[i-1].dwPos;
+		DWORD currPos = m_pPathData[i].dwPos;
+		
+		// 위치를 x, y 좌표로 변환 (맵 크기에 따라 조정 필요)
+		int prevX = prevPos % 512; // MAP_SIZE_WIDTH 사용 예정
+		int prevY = prevPos / 512;
+		int currX = currPos % 512;
+		int currY = currPos / 512;
+		
+		int direction = GetDirection(prevX, prevY, currX, currY);
+		
+		if (currentDirection == -1) {
+			// 첫 번째 방향 설정
+			currentDirection = direction;
+		} else if (currentDirection == direction) {
+			// 같은 방향이면 길이 증가
+			segmentLength++;
+		} else {
+			// 방향이 바뀌면 현재 세그먼트 저장하고 새 세그먼트 시작
+			AddCompressedSegment(startPos, currentDirection, segmentLength);
+			
+			startPos = m_pPathData[i-1].dwPos;
+			currentDirection = direction;
+			segmentLength = 2; // 이전 점 + 현재 점
+		}
+	}
+	
+	// 마지막 세그먼트 저장
+	if (currentDirection != -1) {
+		AddCompressedSegment(startPos, currentDirection, segmentLength);
+	}
+}
+
+int CFindPath::GetDirection(int fromX, int fromY, int toX, int toY) {
+	int dx = toX - fromX;
+	int dy = toY - fromY;
+	
+	// 8방향 인코딩 (0:북, 1:북동, 2:동, 3:남동, 4:남, 5:남서, 6:서, 7:북서)
+	if (dx == 0 && dy == -1) return 0; // 북
+	if (dx == 1 && dy == -1) return 1; // 북동
+	if (dx == 1 && dy == 0) return 2;  // 동
+	if (dx == 1 && dy == 1) return 3;  // 남동
+	if (dx == 0 && dy == 1) return 4;  // 남
+	if (dx == -1 && dy == 1) return 5; // 남서
+	if (dx == -1 && dy == 0) return 6; // 서
+	if (dx == -1 && dy == -1) return 7; // 북서
+	
+	return -1; // 잘못된 방향
+}
+
+void CFindPath::AddCompressedSegment(DWORD startPos, int direction, int length) {
+	if (m_iCompressedSize >= m_iCompressedCapacity) return;
+	
+	m_pCompressedPath[m_iCompressedSize].dwPos = startPos;
+	m_pCompressedPath[m_iCompressedSize].iDirection = direction;
+	m_pCompressedPath[m_iCompressedSize].iLength = length;
+	m_iCompressedSize++;
+}
 ```
 
 
