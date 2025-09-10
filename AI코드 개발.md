@@ -184,6 +184,9 @@ void SaveDataInChunks(DWORD dwCharunique, DWORD dwAccunique, INT32 maxCount, INT
 
 #### 3.4 길찾기 로직 최적화
 클로드 코드를 활용하여 기존 로직에서 성능을 더 높일 수 없는지 한번 검토해 보았더니 대략 60%정도 더 상향이될 수 있는 부분을 찾았다고 한다. 해당 부분을 수정하여 테스트를 해서 서버의 부하를 더 줄여 보는 것으로 적용을 해보았는데, 어느 정도 테스트가 필요해 보인다.
+<details>
+<summary>수정 코드</summary>
+
 ```ruby
 // Binary Heap 구현
 Astar::NodeHeap::NodeHeap(int capacity) {
@@ -361,7 +364,535 @@ void CFindPath::AddCompressedSegment(DWORD startPos, int direction, int length) 
 	m_iCompressedSize++;
 }
 ```
+사용 방법은 하기와 같다
+```ruby
+// v2: 메인 길찾기 함수 (기존 함수의 개선된 버전)
+int Astar::FindPath_v2(PathOrder* pOrder)
+{
+	if (!IsValidPath_v2(&(pOrder->m_Start), &(pOrder->m_Dest))) {
+		return pOrder->m_iPathResultArray;
+	}
+	
+	int result = FindPath_New_v2(pOrder->m_iPathResultArray, pOrder->m_pGameMap, 
+		&(pOrder->m_Start), &(pOrder->m_Dest), pOrder->m_nDistance, 
+		pOrder->m_NpcStatus, pOrder->m_iRange);
+	
+	if (result >= 0) {
+		OptimizePath_v2(result);
+		
+		// 길찾기 성공 후 경로 품질 검사 및 스무딩 자동 적용
+		CFindPath* pPath = GetNPCPathObject(result);
+		if (pPath) {
+			if (!pPath->IsPathOptimal_v2()) {
+				pPath->SmoothPath_v2();
+				g_DebugManager.WriteFindPathLog(m_id, "Path smoothing applied");
+			}
+			
+			// 임시 객체이므로 삭제
+			delete pPath;
+		}
+	}
+	
+	return result;
+}
 
+// v2: 경로 유효성 사전 검증
+bool Astar::IsValidPath_v2(Coordinate* pStartPoint, Coordinate* pEndPoint)
+{
+	// 시작점과 목적지가 같은 경우
+	if (pStartPoint->x == pEndPoint->x && pStartPoint->y == pEndPoint->y) {
+		return false;
+	}
+	
+	// 맵 경계 검증
+	if (pStartPoint->x < 0 || pStartPoint->y < 0 || 
+		pEndPoint->x < 0 || pEndPoint->y < 0) {
+		return false;
+	}
+	
+	// 거리 검증 (너무 먼 거리는 제외)
+	int distance = abs(pStartPoint->x - pEndPoint->x) + abs(pStartPoint->y - pEndPoint->y);
+	if (distance > m_iMaxSearchRadius * 2) {
+		return false;
+	}
+	
+	return true;
+}
+
+// v2: 힙 최적화를 사용한 개선된 길찾기
+int Astar::FindPath_New_v2(int iResultPathArray, CGameMap* pGameMap, Coordinate* pStartPoint,
+	Coordinate* pEndPoint, int iDistance, NPC_CURRENT_STATUS npcStatus, int iRange, bool bNear)
+{
+	DWORD dwCurTime = GetTickCount();
+	
+	if (NULL != pGameMap && (iResultPathArray < 0 || MAX_NPC_COUNT <= iResultPathArray)) {
+		return iResultPathArray;
+	}
+
+	// 기본 설정
+	m_pGameMap = pGameMap;
+	m_idistance = iDistance;
+	m_npcStatus = npcStatus;
+	m_iRange = iRange;
+	m_iCurrentNum = 0;
+
+	corCenter.x = pStartPoint->x;
+	corCenter.y = pStartPoint->y;
+
+	// 사전 검증
+	if (IsNeighborhood(pStartPoint, pEndPoint) && !ExploreMap(pEndPoint->x, pEndPoint->y)) {
+		return iResultPathArray;
+	}
+
+	// 힙 기반 오픈 리스트 사용
+	if (m_bUseHeapOptimization && m_pOpenHeap) {
+		m_pOpenHeap->Clear();
+		
+		// 시작 노드 설정
+		m_pNode[m_iCurrentNum].SetNode(pStartPoint->x, pStartPoint->y, NULL, *pEndPoint);
+		m_pOpenHeap->Push(&m_pNode[m_iCurrentNum++]);
+		
+		Coordinate NewEndPoint = *pEndPoint;
+		Node* SNodeNear = NULL;
+		int cntLimit = 0;
+		
+		// 힙 기반 메인 루프
+		while (!m_pOpenHeap->IsEmpty() && cntLimit < m_iAstarPathMaxTry) {
+			Node* SNode = m_pOpenHeap->Pop();
+			
+			// 목적지 도달 검사
+			if (SNode->point.x == NewEndPoint.x && SNode->point.y == NewEndPoint.y) {
+				break;
+			}
+			
+			// 공격 범위 내 도달 검사
+			if (NPC_CURRENT_STATUS::ATTACK == m_npcStatus && 
+				CheckDIstance(&SNode->point, &NewEndPoint, m_iRange)) {
+				NewEndPoint = SNode->point;
+				break;
+			}
+			
+			// 노드 탐색
+			NewEndPoint = ExploreNode_v2(SNode, NewEndPoint);
+			
+			// 가장 가까운 노드 업데이트
+			if (SNodeNear == NULL || SNodeNear->H > SNode->H) {
+				SNodeNear = SNode;
+			}
+			
+			// 닫힌 노드에 추가
+			m_CloseNode.set(SNode->point.x * pGameMap->m_MapInfo->_i32MaxSize + SNode->point.y);
+			cntLimit++;
+		}
+		
+		// 경로 재구성 및 결과 저장
+		// ... (기존과 동일한 경로 재구성 로직)
+		
+	} else {
+		// 기존 방식으로 폴백
+		return FindPath_New(iResultPathArray, pGameMap, pStartPoint, pEndPoint, 
+			iDistance, npcStatus, iRange, bNear);
+	}
+	
+	g_DebugManager.m_dwNPC_thread_Process_Cnt[m_id]++;
+	g_DebugManager.m_dwNPC_thread_Process[m_id] += GetTickCount() - dwCurTime;
+	
+	return iResultPathArray;
+}
+
+// v2: 힙을 사용한 개선된 노드 탐색
+Coordinate Astar::ExploreNode_v2(Node* SNode, Coordinate EndPoint)
+{
+	// 8방향 탐색 최적화
+	const int dx[] = {-1, 0, 1, 0, -1, -1, 1, 1};
+	const int dy[] = {0, 1, 0, -1, -1, 1, -1, 1};
+	const int moveCost[] = {10, 10, 10, 10, 14, 14, 14, 14}; // 직선:10, 대각선:14
+	
+	for (int dir = 0; dir < 8; dir++) {
+		int newX = SNode->point.x + dx[dir];
+		int newY = SNode->point.y + dy[dir];
+		
+		// 맵 경계 및 이동 가능성 검사
+		if (!ExploreMap(newX, newY)) {
+			// 목적지인 경우 도달 신호
+			if (newX == EndPoint.x && newY == EndPoint.y) {
+				return SNode->point;
+			}
+			continue;
+		}
+		
+		// 대각선 이동 시 추가 검증
+		if (dir >= 4) {
+			int checkX1 = SNode->point.x + dx[dir % 4];
+			int checkY1 = SNode->point.y;
+			int checkX2 = SNode->point.x;
+			int checkY2 = SNode->point.y + dy[dir % 4];
+			
+			if (!ExploreMap(checkX1, checkY1) || !ExploreMap(checkX2, checkY2)) {
+				continue; // 대각선 경로가 막힌 경우
+			}
+		}
+		
+		// 기존 노드 확인
+		Node* pExistingNode = GetNode(newX, newY);
+		if (pExistingNode != NULL) {
+			// G값 업데이트 검사
+			int newG = SNode->G + moveCost[dir];
+			if (pExistingNode->G > newG) {
+				pExistingNode->G = newG;
+				pExistingNode->F = pExistingNode->G + pExistingNode->H;
+				pExistingNode->pParent = SNode;
+			}
+			continue;
+		}
+		
+		// 닫힌 노드 검사
+		if (m_CloseNode[newX * m_pGameMap->m_MapInfo->_i32MaxSize + newY]) {
+			continue;
+		}
+		
+		// 새 노드 생성
+		if ((g_INIFile_Server.m_iNPC_FIND_Path_Count * 8) <= m_iCurrentNum) {
+			return SNode->point; // 메모리 부족
+		}
+		
+		m_pNode[m_iCurrentNum].SetNode(newX, newY, SNode, EndPoint);
+		
+		// 휴리스틱 가중치 적용
+		m_pNode[m_iCurrentNum].H = (int)(m_pNode[m_iCurrentNum].H * m_fHeuristicWeight);
+		m_pNode[m_iCurrentNum].F = m_pNode[m_iCurrentNum].G + m_pNode[m_iCurrentNum].H;
+		
+		SetNode(newX, newY, &m_pNode[m_iCurrentNum]);
+		
+		if (m_bUseHeapOptimization && m_pOpenHeap) {
+			m_pOpenHeap->Push(&m_pNode[m_iCurrentNum++]);
+		}
+	}
+	
+	return EndPoint;
+}
+
+// v2: 힙 최적화된 다음 노드 찾기 (호환성을 위한 함수)
+list<Astar::Node*>::iterator Astar::FindNextNode_v2(list<Astar::Node*>* pOpenNode)
+{
+	// 힙을 사용하는 경우에는 이 함수가 호출되지 않아야 하지만,
+	// 호환성을 위해 기존 방식으로 구현
+	return FindNextNode(pOpenNode);
+}
+
+// v2: 경로 최적화 후처리
+void Astar::OptimizePath_v2(int iResultPathArray)
+{
+	if (iResultPathArray < 0 || iResultPathArray >= MAX_NPC_COUNT) return;
+	
+	auto& pathResult = g_PathFindThread.m_pPathResults[iResultPathArray];
+	
+	// 직선 경로 단순화
+	if (pathResult.path.size() > 2) {
+		auto iter = pathResult.path.begin();
+		auto prev = iter++;
+		auto curr = iter++;
+		
+		while (curr != pathResult.path.end()) {
+			// 세 점이 직선상에 있는지 검사
+			int dx1 = (*curr)->x - (*prev)->x;
+			int dy1 = (*curr)->y - (*prev)->y;
+			int dx2 = (*iter)->x - (*curr)->x;
+			int dy2 = (*iter)->y - (*curr)->y;
+			
+			// 방향이 같으면 중간 점 제거
+			if (dx1 * dy2 == dy1 * dx2 && 
+				((dx1 > 0 && dx2 > 0) || (dx1 < 0 && dx2 < 0) || (dx1 == 0 && dx2 == 0)) &&
+				((dy1 > 0 && dy2 > 0) || (dy1 < 0 && dy2 < 0) || (dy1 == 0 && dy2 == 0))) {
+				
+				// 중간 점 제거
+				pathResult.path.erase(curr);
+				pathResult.m_iMaxPath--;
+				curr = iter;
+			} else {
+				prev = curr;
+				curr = iter;
+			}
+			
+			if (iter != pathResult.path.end()) {
+				++iter;
+			}
+		}
+	}
+}
+
+// v2: PathResult 인덱스로부터 CFindPath 객체 획득
+CFindPath* Astar::GetNPCPathObject(int iResultPathArray)
+{
+	// 유효성 검사
+	if (iResultPathArray < 0 || iResultPathArray >= MAX_NPC_COUNT) {
+		g_DebugManager.WriteFindPathStartLog(m_id, __FILE__, __LINE__, 
+			"GetNPCPathObject invalid index: %d\n", iResultPathArray);
+		return NULL;
+	}
+	
+	// PathResult가 유효한지 확인
+	PathResult* pResult = &g_PathFindThread.m_pPathResults[iResultPathArray];
+	if (!pResult->m_bFindPath || pResult->path.empty()) {
+		return NULL; // 길찾기 실패했거나 경로가 없음
+	}
+	
+	// CFindPath 객체 생성 및 PathResult 데이터 복사
+	CFindPath* pFindPath = new CFindPath();
+	pFindPath->Init_v2(pResult->m_iMaxPath);
+	
+	// PathResult의 경로 데이터를 CFindPath로 복사
+	if (pResult->m_Path && pResult->m_iMaxPath > 0) {
+		// 고정 배열 방식의 경로 데이터 복사
+		for (int i = 0; i < pResult->m_iMaxPath; i++) {
+			int x = pResult->m_Path[i].x;
+			int y = pResult->m_Path[i].y;
+			
+			// 맵 크기 확인 (기본값 512 사용, 실제로는 MapInfo에서 가져와야 함)
+			int mapSize = (pResult->m_pGameMap && pResult->m_pGameMap->m_MapInfo) ? 
+						  pResult->m_pGameMap->m_MapInfo->_i32MaxSize : 512;
+			
+			if (!pFindPath->AddPath_v2(x, y, mapSize, false)) {
+				g_DebugManager.WriteFindPathStartLog(m_id, __FILE__, __LINE__, 
+					"GetNPCPathObject AddPath failed at index: %d\n", i);
+				break;
+			}
+		}
+	} else if (!pResult->path.empty()) {
+		// 리스트 방식의 경로 데이터 복사
+		int mapSize = (pResult->m_pGameMap && pResult->m_pGameMap->m_MapInfo) ? 
+					  pResult->m_pGameMap->m_MapInfo->_i32MaxSize : 512;
+		
+		for (auto iter = pResult->path.begin(); iter != pResult->path.end(); ++iter) {
+			Coordinate* pCoord = *iter;
+			if (pCoord) {
+				if (!pFindPath->AddPath_v2(pCoord->x, pCoord->y, mapSize, false)) {
+					g_DebugManager.WriteFindPathStartLog(m_id, __FILE__, __LINE__, 
+						"GetNPCPathObject AddPath from list failed\n");
+					break;
+				}
+			}
+		}
+	}
+	
+	return pFindPath;
+}
+
+// ==================== v2 개선 함수들 ====================
+
+// v2: 개선된 초기화 (동적 크기 조정 가능)
+void CFindPath::Init_v2(int maxPathLength) {
+	m_iPathSize = 0;
+	m_iCurPos = 0;
+	m_iCompressedSize = 0;
+	
+	// 경로 크기가 기본값보다 크면 재할당
+	if (maxPathLength > m_iMaxPathLength) {
+		delete[] m_pPathData;
+		delete[] m_pCompressedPath;
+		
+		m_iMaxPathLength = maxPathLength;
+		m_pPathData = new path_data[m_iMaxPathLength];
+		m_iCompressedCapacity = m_iMaxPathLength / 2;
+		m_pCompressedPath = new compressed_path_data[m_iCompressedCapacity];
+	}
+	
+	memset(m_pPathData, 0x00, sizeof(path_data) * m_iMaxPathLength);
+}
+
+// v2: 스마트한 현재 위치 반환 (경로 최적화 포함)
+path_data* CFindPath::GetCurPos_v2() {
+	if (m_iCurPos < m_iPathSize) {
+		path_data* current = &m_pPathData[m_iCurPos++];
+		
+		// 실시간 경로 최적화 옵션
+		if (m_bAutoOptimize && m_iCurPos < m_iPathSize - 2) {
+			// 다음 몇 개 점이 직선상에 있으면 건너뛰기
+			path_data* next1 = &m_pPathData[m_iCurPos];
+			path_data* next2 = &m_pPathData[m_iCurPos + 1];
+			
+			// 좌표 변환 (맵 크기 512 가정)
+			int x1 = current->dwPos % 512, y1 = current->dwPos / 512;
+			int x2 = next1->dwPos % 512, y2 = next1->dwPos / 512;
+			int x3 = next2->dwPos % 512, y3 = next2->dwPos / 512;
+			
+			// 직선 검사
+			if ((x2 - x1) * (y3 - y1) == (y2 - y1) * (x3 - x1)) {
+				m_iCurPos++; // 중간 점 건너뛰기
+			}
+		}
+		
+		return current;
+	}
+	return NULL;
+}
+
+// v2: 중복 제거 및 최적화가 포함된 경로 추가
+BOOL CFindPath::AddPath_v2(int x, int y, INT32 i32MaxSize, bool bOptimize) {
+	if (x < 0 || y < 0 || x >= i32MaxSize || y >= i32MaxSize)
+		return FALSE;
+
+	if (m_iPathSize >= m_iMaxPathLength)
+		return FALSE;
+
+	DWORD newPos = x * i32MaxSize + y;
+	
+	// 중복 위치 제거
+	if (m_iPathSize > 0 && m_pPathData[m_iPathSize - 1].dwPos == newPos) {
+		return TRUE; // 중복이지만 성공으로 처리
+	}
+	
+	// 실시간 최적화 (직선 경로 단순화)
+	if (bOptimize && m_iPathSize >= 2) {
+		DWORD prevPos = m_pPathData[m_iPathSize - 2].dwPos;
+		DWORD currPos = m_pPathData[m_iPathSize - 1].dwPos;
+		
+		int prevX = prevPos % i32MaxSize, prevY = prevPos / i32MaxSize;
+		int currX = currPos % i32MaxSize, currY = currPos / i32MaxSize;
+		
+		// 세 점이 직선상에 있으면 중간점 제거
+		if ((currX - prevX) * (y - prevY) == (currY - prevY) * (x - prevX)) {
+			m_pPathData[m_iPathSize - 1].dwPos = newPos; // 마지막 점을 새 점으로 교체
+			return TRUE;
+		}
+	}
+	
+	m_pPathData[m_iPathSize++].dwPos = newPos;
+	return TRUE;
+}
+
+// v2: 실제 남은 경로 수 (최적화된)
+int CFindPath::GetFindPathCnt_v2() {
+	int remainingCount = m_iPathSize - m_iCurPos;
+	
+	// 압축된 경로가 있으면 압축 기준으로 계산
+	if (m_iCompressedSize > 0) {
+		int compressedRemaining = 0;
+		for (int i = 0; i < m_iCompressedSize; i++) {
+			compressedRemaining += m_pCompressedPath[i].iLength;
+		}
+		return compressedRemaining;
+	}
+	
+	return remainingCount;
+}
+
+// v2: 개선된 경로 압축 (더 효율적인 알고리즘)
+void CFindPath::CompressPath_v2() {
+	if (m_iPathSize < 2) {
+		m_iCompressedSize = 0;
+		return;
+	}
+	
+	m_iCompressedSize = 0;
+	
+	// 적응형 세그먼트 압축
+	int segmentStart = 0;
+	
+	while (segmentStart < m_iPathSize - 1) {
+		DWORD startPos = m_pPathData[segmentStart].dwPos;
+		int currentDirection = -1;
+		int segmentLength = 1;
+		int maxSegmentLength = 1;
+		
+		// 가능한 한 긴 직선 세그먼트 찾기
+		for (int i = segmentStart + 1; i < m_iPathSize; i++) {
+			DWORD prevPos = m_pPathData[i-1].dwPos;
+			DWORD currPos = m_pPathData[i].dwPos;
+			
+			int prevX = prevPos % 512, prevY = prevPos / 512;
+			int currX = currPos % 512, currY = currPos / 512;
+			
+			int direction = GetDirection(prevX, prevY, currX, currY);
+			
+			if (currentDirection == -1) {
+				currentDirection = direction;
+				maxSegmentLength = 2;
+			} else if (currentDirection == direction) {
+				maxSegmentLength++;
+			} else {
+				break; // 방향 변경됨
+			}
+		}
+		
+		// 세그먼트 저장
+		AddCompressedSegment(startPos, currentDirection, maxSegmentLength);
+		segmentStart += maxSegmentLength - 1;
+	}
+	
+	// 압축률 검증
+	if (m_iCompressedSize >= m_iPathSize) {
+		// 압축 효과가 없으면 무시
+		m_iCompressedSize = 0;
+	}
+}
+
+// v2: 경로가 최적인지 검사
+bool CFindPath::IsPathOptimal_v2() {
+	if (m_iPathSize < 3) return true;
+	
+	// 불필요한 지그재그 패턴 검사
+	int unnecessaryTurns = 0;
+	
+	for (int i = 1; i < m_iPathSize - 1; i++) {
+		DWORD pos1 = m_pPathData[i-1].dwPos;
+		DWORD pos2 = m_pPathData[i].dwPos;
+		DWORD pos3 = m_pPathData[i+1].dwPos;
+		
+		int x1 = pos1 % 512, y1 = pos1 / 512;
+		int x2 = pos2 % 512, y2 = pos2 / 512;
+		int x3 = pos3 % 512, y3 = pos3 / 512;
+		
+		// 각도 변화가 큰 경우 카운트
+		int dx1 = x2 - x1, dy1 = y2 - y1;
+		int dx2 = x3 - x2, dy2 = y3 - y2;
+		
+		// 방향이 반대인 경우 (지그재그)
+		if (dx1 * dx2 < 0 || dy1 * dy2 < 0) {
+			unnecessaryTurns++;
+		}
+	}
+	
+	// 경로 길이 대비 턴이 많으면 최적이 아님
+	return (unnecessaryTurns * 3 < m_iPathSize);
+}
+
+// v2: 경로 스무딩 (곡선 보간)
+void CFindPath::SmoothPath_v2() {
+	if (m_iPathSize < 3 || m_fSmoothingFactor <= 0.0f) return;
+	
+	path_data* smoothedPath = new path_data[m_iPathSize];
+	smoothedPath[0] = m_pPathData[0]; // 첫 점 유지
+	smoothedPath[m_iPathSize - 1] = m_pPathData[m_iPathSize - 1]; // 마지막 점 유지
+	
+	// 중간 점들을 주변 점들의 가중 평균으로 조정
+	for (int i = 1; i < m_iPathSize - 1; i++) {
+		DWORD pos0 = m_pPathData[i-1].dwPos;
+		DWORD pos1 = m_pPathData[i].dwPos;
+		DWORD pos2 = m_pPathData[i+1].dwPos;
+		
+		int x0 = pos0 % 512, y0 = pos0 / 512;
+		int x1 = pos1 % 512, y1 = pos1 / 512;
+		int x2 = pos2 % 512, y2 = pos2 / 512;
+		
+		// 가중 평균 계산
+		int smoothX = (int)(x1 * (1.0f - m_fSmoothingFactor) + 
+							(x0 + x2) * 0.5f * m_fSmoothingFactor);
+		int smoothY = (int)(y1 * (1.0f - m_fSmoothingFactor) + 
+							(y0 + y2) * 0.5f * m_fSmoothingFactor);
+		
+		smoothedPath[i].dwPos = smoothX * 512 + smoothY;
+	}
+	
+	// 원본을 스무딩된 경로로 교체
+	memcpy(m_pPathData, smoothedPath, sizeof(path_data) * m_iPathSize);
+	delete[] smoothedPath;
+}
+
+```
+대체가 가능한 부분들의 V2함수들을 배치하였고, 해당 부분들을 언제든 뺄 수 있게 Define작업을 하였다.
+
+</details>
 
 #### 3.5 Math 로직 최적화
 기존의 공격 로직의 분할이 필요해 보여 작업을 하였다.
