@@ -474,8 +474,9 @@ void SaveDataInChunks(
 
 ```
 - 기존에는 코드를 호출할 시 굉장히 많은 절차가 필요하였는데, 빼먹거나 수정해야하는 부분에서 실수가 일어날 수 있었다. 그러므로 템플릿을 활용하여 하나로 처리하였다.
+- 이러한 실수를 막기 위해 동적할당하는 부분을 템플릿에 넣었고, 추가적으로 메모리 풀링을 사용하여 메모리 최적화를 하였다. 호출을 단순화 하였고, 성능도 개선을 하였다.
 <details>
-<summary>기존 호출</summary>
+<summary>기존 호출 방식</summary>
     
 ```ruby
         int i32dx = 0;
@@ -521,9 +522,10 @@ void SaveDataInChunks(
 		pInvenparams = NULL;
 ```
 </details>
-- 이러한 실수를 막기 위해 동적할당하는 부분을 템플릿에 넣었고, 추가적으로 메모리 풀링을 사용하여 메모리 최적화를 하였다.
+
+
 <details>
-<summary>신규 호출</summary>
+<summary>개선된 호출 방식</summary>
     
 ```ruby
 		SaveDataInChunks<CProcedure_Save_Inventory, _PROCEDURE_SAVE_INVENTORY_PARAM,_PROCEDURE_SAVE_INVENTORY_ROW >
