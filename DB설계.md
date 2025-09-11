@@ -353,3 +353,192 @@ ALTER PROCEDURE [dbo].[gp_save_pc_inventory]
 
 - SaveInventory의 예시이다. upsert를 활용하여 데이터의 유실을 최소화 하였고, Json입력을 통해 서버와 테이블의 형식으로 데이터를 주고 받는다.
 - 저장속도 측정은 3500만의 데이터가 있을 경우 랜덤한 옵션값으로 500 칸을 업데이트하는데 80ms의 속도가 나왔다. Binary방식에 비해 속도는 빠르지만 좀 더 개선할 방법이 필요해 보였다.
+
+### 3. 호출 간소화 작업
+코드
+```ruby
+template <typename T>
+class MemoryPool {
+private:
+	vector<unique_ptr<T>> m_pool;
+	vector<T*> m_free_list;
+
+	MemoryPool(size_t initial_size = 10) {
+		m_pool.reserve(initial_size);
+		for (size_t i = 0; i < initial_size; ++i) {
+			m_pool.push_back(std::make_unique<T>());
+			m_free_list.push_back(m_pool.back().get());
+		}
+	}
+
+	// 복사 생성자 및 대입 연산자 비활성화
+	MemoryPool(const MemoryPool&) = delete;
+	MemoryPool& operator=(const MemoryPool&) = delete;
+
+public:
+	static MemoryPool& GetInstance() {
+		static MemoryPool instance;
+		return instance;
+	}
+
+	T* Acquire() {
+		if (m_free_list.empty()) {
+			printf("AddMemory!!\n");
+			// 풀이 비었으면 새로 할당
+			size_t current_size = m_pool.size();
+			m_pool.reserve(current_size + 10);
+			for (size_t i = 0; i < 10; ++i) {
+				m_pool.push_back(std::make_unique<T>());
+				m_free_list.push_back(m_pool.back().get());
+			}
+		}
+		T* obj = m_free_list.back();
+		m_free_list.pop_back();
+		return obj;
+	}
+
+	void Release(T* obj) {
+		if (obj) {
+			// 사용이 끝난 객체를 풀에 반환
+			m_free_list.push_back(obj);
+		}
+	}
+
+	size_t GetPoolSize() const {
+		return m_pool.size();
+	}
+};
+
+
+template<typename ProcedureType, typename ParamType,  typename RowType >
+void SaveDataInChunks(
+	/*오류시 저장유니크 없을시 0*/DWORD dwCharunique,
+	/*오류시 저장유니크 없을시 0*/ DWORD dwAccunique,
+	/*데이터 최대 입력갯수*/INT32 maxCount, 
+	/*데이터 묶음 갯수*/INT32 chunkSize,
+	/*오류시 제목*/const char* jsonTypeName,
+	/*데이터 저장조건*/function<bool(RowType&, INT32)>dataProcessor,
+	/*마지막 파람에 넣을 조건*/function<void(ParamType*, const wstring&)> dataParam)
+{
+	INT32 index = 0;
+	vector<RowType> buffer;
+	ProcedureType* procedure = ProcedureType::GetInstance();
+	//ParamType* params = new ParamType();
+	ParamType* params = MemoryPool<ParamType>::GetInstance().Acquire();
+	buffer.reserve(chunkSize);
+
+	while (index < maxCount) {
+		memset(params, 0, sizeof(ParamType));
+		INT32 taken = 0;
+		buffer.clear();
+
+		// 청크 단위로 처리
+		while (taken < chunkSize && index < maxCount) {
+			RowType row;
+			memset(&row, 0x00, sizeof(RowType));
+
+			// 사용자 정의 데이터 처리 로직
+			if (dataProcessor(row, index)) {
+				buffer.push_back(row);
+			}
+			++taken;
+			++index;
+		}
+
+		if (buffer.empty()) continue;
+
+		wstring json = L"";
+
+		// JSON 빌드 및 실행
+		if (dwAccunique != 0)
+		{
+			json = BuildJson(buffer, jsonTypeName, dwAccunique, index);
+		}
+		else if (dwCharunique != 0)
+		{
+			json = BuildJson(buffer, jsonTypeName, dwCharunique, index);
+		}
+
+
+		// 사용자 정의 파라미터 설정 로직
+		dataParam(params, json);
+
+		if (!procedure->Execute(params, nullptr)) {
+			printf("%s::Execute() Failed.\n",typeid(ProcedureType).name());
+		}
+		procedure->ReleaseDBRecords();
+	}
+	MemoryPool<ParamType>::GetInstance().Release(params);
+	//delete params;
+}
+
+```
+- 기존에는 코드를 호출할 시 굉장히 많은 절차가 필요하였는데, 빼먹거나 수정해야하는 부분에서 실수가 일어날 수 있었다. 그러므로 템플릿을 활용하여 하나로 처리하였다.
+<details>
+<summary>기존 호출</summary>
+    
+```ruby
+        int i32dx = 0;
+		vector<_PROCEDURE_SAVE_INVENTORY_ROW> buffer;
+		CProcedure_Save_Inventory* pSaveInven = CProcedure_Save_Inventory::GetInstance();
+		_PROCEDURE_SAVE_INVENTORY_PARAM* pInvenparams = new _PROCEDURE_SAVE_INVENTORY_PARAM();
+		buffer.reserve(JSON_CHUNK_SIZE_50);
+		
+		while (i32dx < MAX_INVENTORY_TOTAL_COUNT) 
+		{
+			memset(pInvenparams, 0x00, sizeof(_PROCEDURE_SAVE_INVENTORY_PARAM));
+			buffer.clear();
+			int i32taken = 0;
+		
+		
+			// 50개 단위로 Push
+			while (i32taken < JSON_CHUNK_SIZE_50 && i32dx < MAX_INVENTORY_TOTAL_COUNT) {
+		
+				_PROCEDURE_SAVE_INVENTORY_ROW row;
+				memset(&row, 0x00, sizeof(_PROCEDURE_SAVE_INVENTORY_ROW));
+				row.i32Slot = i32dx;
+				memcpy(&row.info, &pMsg->Inventory[i32dx], sizeof(ItemInfo));
+				buffer.push_back(row);
+				++i32taken;
+				++i32dx;
+			}
+			if (buffer.empty()) continue;
+		
+			// Build JSON and prepare parameters
+			wstring json = BuildJson(buffer,"Inventory", pMsg->m_CharInfo.dwCharunique, i32dx);
+			pInvenparams->dwCharunique = pMsg->m_CharInfo.dwCharunique;
+			memcpy(pInvenparams->wcJson, json.c_str(), (json.size() + 1) * sizeof(WCHAR));
+		
+			// Execute and release
+			if (!pSaveInven->Execute(pInvenparams, nullptr))
+			{
+				printf("CProcedure_Save_Inventory::Execute() Failed.\n");
+			}
+			pSaveInven->ReleaseDBRecords();
+		}
+		
+		delete pInvenparams;
+		pInvenparams = NULL;
+```
+</details>
+- 이러한 실수를 막기 위해 동적할당하는 부분을 템플릿에 넣었고, 추가적으로 메모리 풀링을 사용하여 메모리 최적화를 하였다.
+<details>
+<summary>신규 호출</summary>
+    
+```ruby
+		SaveDataInChunks<CProcedure_Save_Inventory, _PROCEDURE_SAVE_INVENTORY_PARAM,_PROCEDURE_SAVE_INVENTORY_ROW >
+			(pMsg->m_CharInfo.dwCharunique, pMsg->m_dwAccUnique, MAX_INVENTORY_TOTAL_COUNT, JSON_CHUNK_SIZE_50, "Inventory",
+				[&](_PROCEDURE_SAVE_INVENTORY_ROW& row, INT32 index) -> bool {
+					//초기화
+					row.i32Slot = index;
+					memcpy(&row.info, &pMsg->Inventory[index], sizeof(ItemInfo));
+
+					return true;  // 버퍼에 추가
+				},
+				[&](_PROCEDURE_SAVE_INVENTORY_PARAM* params, const wstring& json) -> void {
+					params->dwCharunique = pMsg->m_CharInfo.dwCharunique;
+					memcpy(params->wcJson, json.c_str(), (json.size() + 1) * sizeof(WCHAR));
+				}
+				);
+```
+</details>
