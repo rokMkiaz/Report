@@ -546,6 +546,1998 @@ void SaveDataInChunks(
 </details>
 
 
-### 4.OLEDB 연결 최적화 작업
-기존 연결 방식에서 여러 문제가 발생하여 개선작업을 진행하는 것이 목적이다. 해당 하는 항목에 대해서 개선작업 진행만 나열하고자 한다.\
-개선된 RowData 저장방식의 속도는 Binary보다는 느리지만, 속도가 그렇게 문제될 정도는 아닌것으로 판된된다.\
+### 4. 프로시저 최적화 작업
+Binary-> RowData로 변경하는 과정에서 속도가 느리니 적용이 불가하다는 판정을 받았다. 그러하기에 개선을 더 해보고자 한다.
+
+#### 4-1. 우선적으로 OLEDB 연결을 호출하는데, 시간이 소요되는 것으로 확인 하였다.
+기존 연결 방식에서 여러 문제가 발생하여 개선작업을 진행하는 것이 목적이다. 해당 하는 항목에 대해서 개선작업 진행만 나열하고자 한다. 개선된 RowData 저장방식의 속도는 Binary보다는 느리지만, 속도가 그렇게 문제될 정도는 아닌것으로 판된되며, 실제로 
+<details>
+<summary>기존 호출</summary>
+    
+```ruby
+//Binding
+#include "StdAfx.h"
+#include "DBBinding.h"
+
+CDBBinding::CDBBinding(void)
+{
+	m_uiBindingCount = 0;
+
+	memset( &m_DBBinding, 0, sizeof(DBBINDING)*MAX_DB_BINDING );
+	memset( &m_DBBindStatus, 0, sizeof(DBBINDSTATUS)*MAX_DB_BINDING );
+
+	for(int i = 0; i < MAX_DB_BINDING ; i++)
+	{
+		m_DBBinding[i].iOrdinal = i + 1;
+		m_DBBinding[i].obLength = 0;
+		m_DBBinding[i].obStatus = 0;
+		m_DBBinding[i].pTypeInfo = NULL;
+		m_DBBinding[i].pObject = NULL;
+		m_DBBinding[i].pBindExt = NULL;
+		m_DBBinding[i].dwPart = DBPART_VALUE;
+		m_DBBinding[i].dwMemOwner = DBMEMOWNER_CLIENTOWNED;
+		m_DBBinding[i].dwFlags = 0;
+		m_DBBinding[i].bScale = 0;
+		m_DBBinding[1].bPrecision = 11;
+	} 
+}
+
+CDBBinding::~CDBBinding(void)
+{
+}
+
+bool CDBBinding::Bind( DBPARAMIOENUM DBParamIO, DBTYPEENUM DBType, unsigned int uiSize, unsigned int uiOffset )
+{
+	if( m_uiBindingCount >= MAX_DB_BINDING )
+		return false;
+
+
+	m_DBBinding[ m_uiBindingCount ].obValue = uiOffset;
+	m_DBBinding[ m_uiBindingCount ].eParamIO = DBParamIO;
+	m_DBBinding[ m_uiBindingCount ].cbMaxLen = uiSize;	
+	m_DBBinding[ m_uiBindingCount ].wType = DBType;
+	
+	m_uiBindingCount++;
+
+	return true;
+}
+
+
+```
+```ruby
+//Connect
+#pragma warning(disable:4996)
+
+#define DBINITCONSTANTS
+
+
+#include "StdAfx.h"
+#include "DBConnection.h"
+#include "DBUtil.h"
+#include "../../server_Common/DXUTTimer.h"
+#ifndef _SQLOLEDB_H_
+#include <sqloledb.h>
+#endif
+
+#include <stdio.h>
+
+CDBConnection::CDBConnection(void)
+{
+	m_pIDBInitialize = NULL;
+	m_pIDBProperties = NULL;
+	m_pIDBCreateSession = NULL;
+	m_pIDBCreateCommand = NULL;
+	m_pITransaction = NULL;
+	m_pICommandText = NULL;
+	m_pIAccessor = NULL;
+	m_pIRowset = NULL;
+	m_pRows = &m_hRows[0];
+	m_cNumRows = 0;
+
+	CoInitialize( NULL );
+}
+
+CDBConnection::~CDBConnection(void)
+{
+	Close();
+
+	CoUninitialize();
+}
+
+
+void CDBConnection::Close()
+{
+	if( m_pIAccessor != NULL )
+	{
+		m_pIAccessor->Release();
+		m_pIAccessor = NULL;
+	}
+	
+
+	if( m_pICommandText != NULL )
+	{
+		m_pICommandText->Release();
+		m_pICommandText = NULL;
+	}
+	
+
+	if( m_pIDBCreateCommand != NULL )
+	{
+		m_pIDBCreateCommand->Release();
+		m_pIDBCreateCommand = NULL;
+	}
+	
+
+	if( m_pIDBCreateSession != NULL )
+	{
+		m_pIDBCreateSession->Release();
+		m_pIDBCreateSession = NULL;
+	}
+
+	if( m_pITransaction != NULL )
+	{
+		m_pITransaction->Release();
+		m_pITransaction = NULL;
+	}
+
+	if( m_pIDBProperties != NULL )
+	{
+	    m_pIDBProperties->Release();
+		m_pIDBProperties = NULL;
+	}
+	
+	if( m_pIDBInitialize != NULL )
+	{
+		m_pIDBInitialize->Uninitialize();
+		m_pIDBInitialize->Release();
+		m_pIDBInitialize = NULL;
+	}
+
+}
+
+bool CDBConnection::Connect( WCHAR *wDataSource, WCHAR *wCatalog, WCHAR *wUserID, WCHAR *wPassword )
+{
+	Close();
+
+
+	HRESULT hr;
+
+	hr = CoCreateInstance(  CLSID_SQLOLEDB,
+							NULL,
+							CLSCTX_INPROC_SERVER,
+							IID_IDBInitialize,
+							(void **) &m_pIDBInitialize );
+
+	if( FAILED(hr) ) 
+		return false;
+
+
+	DBPROP   InitProperties[4];
+
+	for(int i = 0; i < 4; i++)
+        VariantInit(&InitProperties[i].vValue);
+  
+
+
+    //Server name.
+    InitProperties[0].dwPropertyID  = DBPROP_INIT_DATASOURCE;
+    InitProperties[0].vValue.vt     = VT_BSTR;
+	InitProperties[0].vValue.bstrVal= SysAllocString( wDataSource );		//sql db ip address
+    InitProperties[0].dwOptions     = DBPROPOPTIONS_REQUIRED;
+    InitProperties[0].colid         = DB_NULLID;
+
+
+    //Database.
+    InitProperties[1].dwPropertyID  = DBPROP_INIT_CATALOG;
+    InitProperties[1].vValue.vt     = VT_BSTR;
+    InitProperties[1].vValue.bstrVal= SysAllocString( wCatalog );	//sql db name
+	InitProperties[1].dwOptions     = DBPROPOPTIONS_REQUIRED;
+    InitProperties[1].colid         = DB_NULLID; 
+
+
+    //Username (login).
+    InitProperties[2].dwPropertyID  = DBPROP_AUTH_USERID; 
+    InitProperties[2].vValue.vt     = VT_BSTR;
+	InitProperties[2].vValue.bstrVal= SysAllocString( wUserID );		//sql db account
+    InitProperties[2].dwOptions     = DBPROPOPTIONS_REQUIRED;
+    InitProperties[2].colid         = DB_NULLID;
+
+
+    //Password.
+    InitProperties[3].dwPropertyID  = DBPROP_AUTH_PASSWORD;
+    InitProperties[3].vValue.vt     = VT_BSTR;
+	InitProperties[3].vValue.bstrVal= SysAllocString( wPassword);	//sql db pass
+    InitProperties[3].dwOptions     = DBPROPOPTIONS_REQUIRED;
+    InitProperties[3].colid         = DB_NULLID;
+
+    m_rgInitPropSet[0].guidPropertySet = DBPROPSET_DBINIT;
+    m_rgInitPropSet[0].cProperties    = 4;
+    m_rgInitPropSet[0].rgProperties   = InitProperties;
+
+
+
+    hr = m_pIDBInitialize->QueryInterface(IID_IDBProperties, 
+                                   (void **)&m_pIDBProperties );
+	if (FAILED(hr))
+	{
+		DumpErrorInfo( m_pIDBInitialize, IID_IDBInitialize );
+		return false;
+	}
+
+
+	hr = m_pIDBProperties->SetProperties(1, m_rgInitPropSet); 
+	if (FAILED(hr)) 
+	{
+		DumpErrorInfo( m_pIDBProperties, IID_IDBProperties );
+		return false;
+	}
+
+
+ 	for(int i = 0; i < 4; i++)
+		VariantClear(&InitProperties[i].vValue);
+
+	m_pIDBProperties->Release();
+	m_pIDBProperties = NULL;
+
+
+	if(FAILED(m_pIDBInitialize->Initialize())) 
+	{
+		DumpErrorInfo( m_pIDBInitialize, IID_IDBInitialize );
+		return false;
+	}
+
+	//create session
+    if(FAILED(m_pIDBInitialize->QueryInterface(
+                                IID_IDBCreateSession,
+                                (void**) &m_pIDBCreateSession))) 
+	{
+		return false;
+	}
+
+
+	if(FAILED(m_pIDBCreateSession->CreateSession(
+                                     NULL, 
+                                     IID_IDBCreateCommand, 
+                                     (IUnknown**) &m_pIDBCreateCommand)))  
+	{
+		DumpErrorInfo( m_pIDBCreateSession, IID_IDBCreateSession );
+		return false;
+	}
+
+
+
+    if(FAILED(m_pIDBCreateCommand->CreateCommand(
+                                    NULL, 
+                                    IID_ICommandText, 
+                                    (IUnknown**) &m_pICommandText)))  
+	{
+		DumpErrorInfo( m_pIDBCreateCommand, IID_IDBCreateCommand );
+		return false;
+	}
+
+
+	if (FAILED(hr = m_pIDBCreateCommand->QueryInterface(IID_ITransactionLocal,
+					(void**) &m_pITransaction)))   
+	{
+		DumpErrorInfo( m_pIDBCreateCommand, IID_IDBCreateCommand );
+		return false;
+	}
+
+
+	return true;
+}
+
+bool CDBConnection::Connect_byGNIDBInfoFile( char *szFile, int iLine )
+{
+	FILE *fp = fopen( szFile, "r" ); // "r+t" );
+	if( fp == NULL ) 
+	{
+		printf( "\n\tcannot open file(%s) ... \t", szFile );
+		return false;
+	}
+
+
+	wchar_t		string[4096];			// 문서 줄단위 저장 변수
+	wchar_t		wIP[256];	
+	wchar_t		wDBName[256];	
+	wchar_t		wID[256];	
+	wchar_t		wPass[256];	
+	wchar_t*	token;					// 토큰
+	wchar_t		splitter[] = L" \n\t";	// 구분자 : /, 캐리지리턴, 탭 
+	int			iLineCount = 0;
+
+		
+	while( 1 )	 // 검색 루프 
+	{
+		// 줄 단위로 읽기		
+		if( fgetws( string, 4096 , fp ) == NULL ) 
+		{
+			fclose( fp );
+			return false;
+		}
+
+		// 주석이 있다면 다음 줄 읽음
+		if( string[ 0 ] == ';' || (0==wcscmp( string, L"\n" )) ) 
+			continue;
+
+			
+		// ip
+		token = wcstok( string, splitter );	
+		if( token == NULL )		continue;
+		wcscpy( wIP, token );
+
+		// dbname
+		token = wcstok( NULL, splitter );	
+		if( token == NULL )		continue;
+		wcscpy( wDBName, token );
+
+		// id
+		token = wcstok( NULL, splitter );	
+		if( token == NULL )		continue;
+		wcscpy( wID, token );
+
+		// pass
+		token = wcstok( NULL, splitter );	
+		if( token == NULL )		continue;
+		wcscpy( wPass, token );
+
+		// 설정된 라인이라면 연결
+		if( iLineCount == iLine )
+		{
+			fclose( fp );
+			return Connect( wIP, wDBName, wID, wPass );
+		}
+		iLineCount++;
+	};
+	fclose( fp );
+
+	return false;
+}
+
+
+
+
+
+
+bool CDBConnection::SetCommandText( ICommandText* pICommandText,WCHAR* wCmdString )
+{
+	if( pICommandText == NULL ) 
+		return false;
+	
+	if( FAILED(pICommandText->SetCommandText(DBGUID_DBSQL,wCmdString)) ) 
+		return false;
+
+	return true;
+}
+
+
+
+bool CDBConnection::Execute()
+{
+	HRESULT hr;
+	hr = m_pICommandText->Execute(NULL,
+							 IID_IRowset,
+							 NULL,
+							 &m_cNumRows,
+							 (IUnknown**)&m_pIRowset);
+
+	if (FAILED(hr)) 
+	{
+		DumpErrorInfo( m_pICommandText, IID_ICommandText );
+		return false;
+	}
+
+	return true;
+}
+
+
+
+bool CDBConnection::ExecuteSQL( WCHAR *wSQLText )
+{
+	//double dTime = g_Timer.GetTime();
+	SetCommandText( m_pICommandText, wSQLText );
+	//printf( "SetCommandText() Time : %f\n", g_Timer.GetTime()-dTime );
+
+
+	//dTime = g_Timer.GetTime();
+	bool bReturn = Execute();
+	//printf( "Execute() Time : %f\n", g_Timer.GetTime()-dTime );
+
+
+	return bReturn;
+}
+
+
+```
+```ruby
+//Procedure
+#include "StdAfx.h"
+#include "NetGlobal.h"
+#include "StoredProcedure.h"
+#include "DBConnection.h"
+#include "DBUtil.h"
+#include "../../server_Common/Global.h"
+#include "../../server_Common/DXUTTimer.h"
+
+float	CStoredProcedure::m_fStandardTime = 0;
+
+
+#ifndef _ADMINPAGE_DLL	// 프로젝트 속성에서 전처리기 처리
+
+#include "../../server_Common/CSVFile_SMS.h"
+#include "../../server_Common/INIFile_Setting.h"
+
+
+
+double		g_dSendSMSTime = 0;
+
+void SendSMS(char *szProcedureName)	// 관리자, 프로그래머에게 문자메세지 보내기
+{
+	printf( "SMS SENT	11\n");
+	if(0 == g_INIFile_Setting.m_iSMSState)
+		return;
+
+	// 실패한지 3분이 되지 않았다면 메세지 안보냄
+	if( g_Timer.GetTime() - g_dSendSMSTime < 180.0f )
+		return;
+}
+
+#endif
+
+CStoredProcedure::CStoredProcedure(void)
+{
+	m_fpLogFile = NULL;
+	m_pParamBinding = NULL;
+	m_pRowsetBinding = NULL;
+	m_hRowAccessor = NULL;
+	m_hAccessor = NULL;
+	m_pDBConnection = NULL;
+	m_pICommandText = NULL;
+	m_pIAccessor = NULL;
+	m_pIRowset = NULL;
+}
+
+
+CStoredProcedure::~CStoredProcedure(void)
+{
+}
+
+void CStoredProcedure::Close()
+{
+	if( m_pParamBinding )
+	{
+		delete m_pParamBinding;
+		m_pParamBinding = NULL;
+	}
+
+	if( m_pRowsetBinding )
+	{
+		delete m_pRowsetBinding;
+		m_pRowsetBinding = NULL;
+	}
+
+	if( m_pICommandText )
+	{
+		m_pICommandText->Release();
+		m_pICommandText = NULL;
+	}
+
+	if( m_pIAccessor )
+	{
+		m_pIAccessor->Release();
+		m_pIAccessor = NULL;
+	}
+}
+
+bool CStoredProcedure::AddParamBinding( DBTYPEENUM DBType, unsigned int uiSize, unsigned int uiOffset, bool bOutputParam )
+{
+	if( m_pParamBinding == NULL )
+	{
+		m_pParamBinding = new CDBBinding;
+	}
+
+	DBPARAMIOENUM	DBParamIO;
+	if( bOutputParam == true )	DBParamIO = DBPARAMIO_OUTPUT;
+	else						DBParamIO = DBPARAMIO_INPUT;
+
+	return m_pParamBinding->Bind( DBParamIO, DBType, uiSize, uiOffset );
+}
+
+
+bool CStoredProcedure::AddRowsetBinding( DBTYPEENUM DBType, unsigned int uiSize, unsigned int uiOffset )
+{
+	if( m_pRowsetBinding == NULL )
+	{
+		m_pRowsetBinding = new CDBBinding;
+	}
+
+	return m_pRowsetBinding->Bind( DBPARAMIO_NOTPARAM, DBType, uiSize, uiOffset );
+}
+
+
+
+
+bool CStoredProcedure::Init( CDBConnection* pDBConnection, WCHAR* wCmdString )
+{
+	if( pDBConnection == NULL ) 
+		return false;
+
+	WideCharToMultiByte( CP_ACP, 0, wCmdString, -1, m_szInitialString, 256, NULL, NULL );
+
+	m_pDBConnection = pDBConnection;
+
+    if( FAILED(pDBConnection->GetCreateCommand()->CreateCommand( 
+														NULL, 
+														IID_ICommandText, 
+														(IUnknown**) &m_pICommandText)) )  
+	{
+		printf( "CreateCommand() Failed\n" );
+		return false;
+	}
+
+
+
+	if( pDBConnection->SetCommandText( m_pICommandText, wCmdString ) == false ) 
+	{
+		printf( "SetCommandText() Failed\n" );
+		return false;
+	}
+
+
+	return CreateAccessor();
+}
+
+
+
+
+bool CStoredProcedure::CreateAccessor()	// Accessor 생성
+{
+	if( FAILED(m_pICommandText->QueryInterface(IID_IAccessor, (void**)&(m_pIAccessor))) ) 
+	{
+		DumpErrorInfo( m_pICommandText, IID_ICommandText );
+		return false;
+	}
+
+	if( m_pParamBinding )
+	{
+		if( FAILED(m_pIAccessor->CreateAccessor( DBACCESSOR_PARAMETERDATA, m_pParamBinding->m_uiBindingCount, m_pParamBinding->m_DBBinding,
+			0, &m_hAccessor, m_pParamBinding->m_DBBindStatus)) )
+			return false;
+	}
+
+	if( m_pRowsetBinding )
+	{
+		if(FAILED(m_pIAccessor->CreateAccessor( DBACCESSOR_ROWDATA, m_pRowsetBinding->m_uiBindingCount, m_pRowsetBinding->m_DBBinding, 
+			0, &m_hRowAccessor, m_pRowsetBinding->m_DBBindStatus)) )
+			return false;
+	}
+
+	return true;
+}
+
+
+bool CStoredProcedure::Execute( void *pParam, void *pRowset )	// 저장 프로시져 실행
+{
+	// 기준시간이 설정되어있으면 수행시간 측정
+	double	dTime = 0;
+//	if( m_fStandardTime > 0 )
+	{
+		dTime = g_Timer.GetTime();
+	}
+
+
+	HRESULT		hr;
+	DBPARAMS	Params;
+	DBROWCOUNT	cNumRows = 0;
+
+
+	m_pResultRowset = pRowset;
+
+	if( pParam == NULL )	// 파라미터를 NULL로 하면 DB함수 호출할때 에러가 나니까 그냥 이클래스를 파라미터로 하자
+	{
+		Params.pData = this;
+	}
+	else
+	{
+		Params.pData = pParam;
+	}
+	Params.cParamSets = 1;
+	Params.hAccessor  = m_hAccessor;
+
+
+	m_iRecordCount		= 0;
+	m_iCurrentRecord	= 0;
+	
+/*
+	if (FAILED(hr = ((ITransactionLocal*) m_pDBConnection->m_pITransaction)->StartTransaction(
+				ISOLATIONLEVEL_REPEATABLEREAD, 0, NULL, NULL)))
+	{
+//		if( m_pDBConnection->m_pIRowset != NULL )	
+//		{
+//			m_pDBConnection->m_pIRowset->Release();
+//			m_pDBConnection->m_pIRowset = NULL;
+//		}
+	
+		m_pDBConnection->m_pITransaction->Abort( NULL, FALSE, FALSE );
+		DebugFilePrintf( __FILE__, __LINE__, "StartTransaction FAILED	%s\n",m_szInitialString); 
+		return false;
+	}
+
+
+*/
+
+	//Execute the command.
+	if( FAILED(hr = m_pICommandText->Execute( NULL, IID_IRowset, &Params, &cNumRows, (IUnknown **) &(m_pIRowset))) )
+	{
+		DumpErrorInfo( m_pICommandText, IID_ICommandText );
+
+		m_pDBConnection->OnProcedureExecuteFailed( m_szInitialString );	// 에러날때 실행하는 함수
+
+/*		if( m_pDBConnection->m_pIRowset != NULL )	
+		{
+			m_pDBConnection->m_pIRowset->Release();
+			m_pDBConnection->m_pIRowset = NULL;
+		}
+*/
+//		m_pDBConnection->m_pITransaction->Abort( NULL, FALSE, FALSE );
+#ifndef _ADMINPAGE_DLL
+		SendSMS(m_szInitialString);
+#endif
+		return false;
+	}
+/*
+	if( m_pDBConnection->m_pIRowset != NULL )	
+	{
+		m_pDBConnection->m_pIRowset->Release();
+		m_pDBConnection->m_pIRowset = NULL;
+	}
+*/
+	// ROWSET 은 Execute() 호출후에 마지막에 ReleaseDBRecords() 를 호출해서 메모리 해제해야한다.
+/*    if (FAILED(hr = m_pDBConnection->m_pITransaction->Commit(FALSE, XACTTC_SYNC, 0)))
+    {
+		if( m_pDBConnection->m_pIRowset != NULL )	
+		{
+			m_pDBConnection->m_pIRowset->Release();
+			m_pDBConnection->m_pIRowset = NULL;
+		}
+		return false;
+    }
+*/
+	// 기준시간이 설정되어있으면 수행시간 측정
+	double dDiffTime = g_Timer.GetTime()-dTime;
+
+	if( m_fStandardTime > 0 )
+	{
+		if( dDiffTime >= m_fStandardTime )
+		{
+			printf( "DB PROC TIME : %40s ... %f\n", m_szInitialString, dDiffTime );
+		}
+	}
+
+	if( dDiffTime >= 0.1f )
+	{
+		LogFile_Printf( "DB PROC TIME : %40s ... %f\n", m_szInitialString, dDiffTime );
+	}
+
+	return true;
+}
+
+
+bool CStoredProcedure::GetFirstRecord()
+{
+	// 레코드 50개 가져오기
+	IRowset *pRowset = m_pIRowset;
+	if( pRowset == NULL )
+		return false;
+
+
+	if( FAILED( pRowset->GetNextRows( NULL, 0, 50, &m_iRecordCount, &m_pDBConnection->m_pRows)) )
+	{
+//		if( pRowset != NULL )	
+//			pRowset->Release();
+		return false;
+	}
+	// printf( "record count: %d\n", m_iRecordCount );
+
+
+
+
+	// 첫번째 레코드 데이터 가져오기
+	m_iCurrentRecord = 0;
+
+	if( m_iRecordCount == 0 )
+		return false;
+
+	if( m_pResultRowset == NULL )
+		return false;
+
+	if(FAILED( m_pIRowset->GetData(m_pDBConnection->m_hRows[m_iCurrentRecord], m_hRowAccessor, m_pResultRowset )))
+		return false;
+
+
+	return true;
+}
+
+
+
+bool CStoredProcedure::GetNextRecord()
+{
+	if( m_iRecordCount == 0 )
+		return false;
+
+	if( m_pResultRowset == NULL )
+		return false;
+
+	m_iCurrentRecord ++;
+	if( m_iCurrentRecord >= m_iRecordCount )
+	{
+		// 먼저 불러온 50개 레코드 릴리즈
+		m_pIRowset->ReleaseRows( m_iRecordCount, m_pDBConnection->m_hRows, NULL, NULL, NULL );
+
+
+		// 다음 50개 레코드 가져오기
+		IRowset *pRowset = m_pIRowset;
+		if( pRowset == NULL )
+			return false;
+
+		if( FAILED( pRowset->GetNextRows( NULL, 0, 50, &m_iRecordCount, &m_pDBConnection->m_pRows)) )
+		{
+			if( pRowset != NULL )	
+				pRowset->Release();
+			return false;
+		}
+		if( m_iRecordCount == 0 )
+			return false;
+
+		m_iCurrentRecord = 0;	// 가져온 50개 레코드 처음부터
+	}
+
+
+	if(FAILED( m_pIRowset->GetData(m_pDBConnection->m_hRows[m_iCurrentRecord], m_hRowAccessor, m_pResultRowset )))
+		return false;
+
+	return true;
+}
+
+
+
+void CStoredProcedure::ReleaseDBRecords()
+{
+ //  HRESULT hr =  m_pDBConnection->m_pITransaction->Commit(FALSE, XACTTC_SYNC, 0);
+	
+
+	if( m_pIRowset != NULL )	
+	{
+		m_pIRowset->Release();
+		m_pIRowset = NULL;
+	}
+}
+
+
+void CStoredProcedure::LogFile_Printf( char * strText, ... )
+{
+	if( m_fpLogFile == NULL )	// 파일이 없다면 새로 파일 생성
+	{
+		// 현재 시간
+		char	szTime[256];
+		time_t	currentTime = time(0);
+		strftime( szTime, 256, "%Y%m%d_%H%M%S", localtime( &currentTime ) );
+
+		char	szLogDir[256];
+		sprintf( szLogDir, "%s\\log",g_Global.m_szModulePath );
+		CreateDirectoryA( szLogDir, NULL ); 
+
+		char szLogFile[256];
+		sprintf( szLogFile, "%s\\log\\DB_Execute_Log_%s.txt", 
+			g_Global.m_szModulePath, 
+			szTime 
+			);
+		m_fpLogFile = fopen( szLogFile, "a" );
+	}
+	else
+	{
+		// 로그 파일 제한 크기가 지정되어 있다면 크기가 됐는지 검사
+		if( m_fpLogFile )
+		{
+			fseek( m_fpLogFile, 0, SEEK_END );
+			long lFileSize = ftell( m_fpLogFile );
+			if( lFileSize >= 4096 )	
+			{
+				fclose( m_fpLogFile );
+
+				// 제한 크기를 넘는다면 파일 새로 생성
+				char	szTime[256];
+				time_t	currentTime = time(0);
+				strftime( szTime, 256, "%Y%m%d_%H%M%S", localtime( &currentTime ) );
+
+				char szLogFile[256];
+				sprintf( szLogFile, "%s\\log\\DB_Execute_Log__%s.txt", 
+					g_Global.m_szModulePath, 
+					szTime 
+					);
+				m_fpLogFile = fopen( szLogFile, "a" );
+				
+			}
+		}
+	}
+
+
+	if( m_fpLogFile )
+	{
+		// 현재 시간
+		char	szTime[256];
+		time_t	currentTime = time(0);
+		strftime( szTime, 256, "%Y-%m-%d %H:%M:%S", localtime( &currentTime ) );
+
+
+		char strData[4096];
+		va_list vargs;
+		va_start( vargs, strText );
+		vsprintf( strData, strText, vargs );
+		va_end( vargs );
+
+
+		fprintf( m_fpLogFile, "%s : %s", szTime, strData );
+		fflush( m_fpLogFile );
+	}
+}
+
+
+```
+</details>
+
+
+<details>
+<summary>개선된 호출</summary>
+    
+```ruby
+//Binding
+#include "StdAfx.h"
+#include "DBBinding_v3.h"
+
+CDBBinding_v3::CDBBinding_v3(void)
+{
+	m_uiBindingCount = 0;
+	m_uiBindingCapacity = STACK_DB_BINDING_LIMIT;
+	m_bUsingStack = true;
+	
+	// 스택 메모리 포인터 설정
+	m_pDBBinding = m_StackBinding;
+	m_pDBBindStatus = m_StackBindStatus;
+	
+	// 스택 메모리 초기화
+	memset( m_StackBinding, 0, sizeof(DBBINDING) * STACK_DB_BINDING_LIMIT );
+	memset( m_StackBindStatus, 0, sizeof(DBBINDSTATUS) * STACK_DB_BINDING_LIMIT );
+
+	// 기본 값 초기화
+	for(unsigned int i = 0; i < STACK_DB_BINDING_LIMIT; i++)
+	{
+		m_StackBinding[i].iOrdinal = i + 1;
+		m_StackBinding[i].obLength = 0;
+		m_StackBinding[i].obStatus = 0;
+		m_StackBinding[i].pTypeInfo = NULL;
+		m_StackBinding[i].pObject = NULL;
+		m_StackBinding[i].pBindExt = NULL;
+		m_StackBinding[i].dwPart = DBPART_VALUE;
+		m_StackBinding[i].dwMemOwner = DBMEMOWNER_CLIENTOWNED;
+		m_StackBinding[i].dwFlags = 0;
+		m_StackBinding[i].bScale = 0;
+		m_StackBinding[i].bPrecision = 11;
+	}
+}
+
+CDBBinding_v3::CDBBinding_v3(unsigned int uiInitialSize)
+{
+	m_uiBindingCount = 0;
+	
+	if (uiInitialSize <= STACK_DB_BINDING_LIMIT)
+	{
+		// 작은 크기는 스택 사용
+		m_uiBindingCapacity = STACK_DB_BINDING_LIMIT;
+		m_bUsingStack = true;
+		m_pDBBinding = m_StackBinding;
+		m_pDBBindStatus = m_StackBindStatus;
+		
+		memset( m_StackBinding, 0, sizeof(DBBINDING) * STACK_DB_BINDING_LIMIT );
+		memset( m_StackBindStatus, 0, sizeof(DBBINDSTATUS) * STACK_DB_BINDING_LIMIT );
+		
+		for(unsigned int i = 0; i < STACK_DB_BINDING_LIMIT; i++)
+		{
+			m_StackBinding[i].iOrdinal = i + 1;
+			m_StackBinding[i].obLength = 0;
+			m_StackBinding[i].obStatus = 0;
+			m_StackBinding[i].pTypeInfo = NULL;
+			m_StackBinding[i].pObject = NULL;
+			m_StackBinding[i].pBindExt = NULL;
+			m_StackBinding[i].dwPart = DBPART_VALUE;
+			m_StackBinding[i].dwMemOwner = DBMEMOWNER_CLIENTOWNED;
+			m_StackBinding[i].dwFlags = 0;
+			m_StackBinding[i].bScale = 0;
+			m_StackBinding[i].bPrecision = 11;
+		}
+	}
+	else
+	{
+		// 큰 크기는 바로 힙 사용
+		m_uiBindingCapacity = uiInitialSize;
+		m_bUsingStack = false;
+		
+		m_pDBBinding = new DBBINDING[m_uiBindingCapacity];
+		m_pDBBindStatus = new DBBINDSTATUS[m_uiBindingCapacity];
+		
+		memset( m_pDBBinding, 0, sizeof(DBBINDING) * m_uiBindingCapacity );
+		memset( m_pDBBindStatus, 0, sizeof(DBBINDSTATUS) * m_uiBindingCapacity );
+		
+		for(unsigned int i = 0; i < m_uiBindingCapacity; i++)
+		{
+			m_pDBBinding[i].iOrdinal = i + 1;
+			m_pDBBinding[i].obLength = 0;
+			m_pDBBinding[i].obStatus = 0;
+			m_pDBBinding[i].pTypeInfo = NULL;
+			m_pDBBinding[i].pObject = NULL;
+			m_pDBBinding[i].pBindExt = NULL;
+			m_pDBBinding[i].dwPart = DBPART_VALUE;
+			m_pDBBinding[i].dwMemOwner = DBMEMOWNER_CLIENTOWNED;
+			m_pDBBinding[i].dwFlags = 0;
+			m_pDBBinding[i].bScale = 0;
+			m_pDBBinding[i].bPrecision = 11;
+		}
+	}
+}
+
+CDBBinding_v3::~CDBBinding_v3(void)
+{
+	if (!m_bUsingStack)
+	{
+		if (m_pDBBinding)
+		{
+			delete[] m_pDBBinding;
+			m_pDBBinding = NULL;
+		}
+		
+		if (m_pDBBindStatus)
+		{
+			delete[] m_pDBBindStatus;
+			m_pDBBindStatus = NULL;
+		}
+	}
+}
+
+void CDBBinding_v3::SwitchToHeap()
+{
+	if (!m_bUsingStack)
+		return;
+		
+	// 새로운 힙 메모리 할당 (2배 크기)
+	unsigned int newCapacity = STACK_DB_BINDING_LIMIT * 2;
+	DBBINDING* newDBBinding = new DBBINDING[newCapacity];
+	DBBINDSTATUS* newDBBindStatus = new DBBINDSTATUS[newCapacity];
+	
+	// 기존 스택 데이터 복사
+	memcpy(newDBBinding, m_StackBinding, sizeof(DBBINDING) * STACK_DB_BINDING_LIMIT);
+	memcpy(newDBBindStatus, m_StackBindStatus, sizeof(DBBINDSTATUS) * STACK_DB_BINDING_LIMIT);
+	
+	// 새로운 영역 초기화
+	memset(newDBBinding + STACK_DB_BINDING_LIMIT, 0, sizeof(DBBINDING) * STACK_DB_BINDING_LIMIT);
+	memset(newDBBindStatus + STACK_DB_BINDING_LIMIT, 0, sizeof(DBBINDSTATUS) * STACK_DB_BINDING_LIMIT);
+	
+	// 새로운 바인딩 기본값 설정
+	for(unsigned int i = STACK_DB_BINDING_LIMIT; i < newCapacity; i++)
+	{
+		newDBBinding[i].iOrdinal = i + 1;
+		newDBBinding[i].obLength = 0;
+		newDBBinding[i].obStatus = 0;
+		newDBBinding[i].pTypeInfo = NULL;
+		newDBBinding[i].pObject = NULL;
+		newDBBinding[i].pBindExt = NULL;
+		newDBBinding[i].dwPart = DBPART_VALUE;
+		newDBBinding[i].dwMemOwner = DBMEMOWNER_CLIENTOWNED;
+		newDBBinding[i].dwFlags = 0;
+		newDBBinding[i].bScale = 0;
+		newDBBinding[i].bPrecision = 11;
+	}
+	
+	// 포인터 전환
+	m_pDBBinding = newDBBinding;
+	m_pDBBindStatus = newDBBindStatus;
+	m_uiBindingCapacity = newCapacity;
+	m_bUsingStack = false;
+}
+
+void CDBBinding_v3::ResizeIfNeeded()
+{
+	if (m_uiBindingCount >= m_uiBindingCapacity)
+	{
+		if (m_bUsingStack)
+		{
+			// 스택에서 힙으로 전환
+			SwitchToHeap();
+		}
+		else
+		{
+			// 힙 메모리 확장 (2배)
+			unsigned int newCapacity = m_uiBindingCapacity * 2;
+			
+			DBBINDING* newDBBinding = new DBBINDING[newCapacity];
+			DBBINDSTATUS* newDBBindStatus = new DBBINDSTATUS[newCapacity];
+			
+			// 기존 데이터 복사
+			memcpy(newDBBinding, m_pDBBinding, sizeof(DBBINDING) * m_uiBindingCapacity);
+			memcpy(newDBBindStatus, m_pDBBindStatus, sizeof(DBBINDSTATUS) * m_uiBindingCapacity);
+			
+			// 새로운 영역 초기화
+			memset(newDBBinding + m_uiBindingCapacity, 0, sizeof(DBBINDING) * m_uiBindingCapacity);
+			memset(newDBBindStatus + m_uiBindingCapacity, 0, sizeof(DBBINDSTATUS) * m_uiBindingCapacity);
+			
+			// 새로운 바인딩 기본값 설정
+			for(unsigned int i = m_uiBindingCapacity; i < newCapacity; i++)
+			{
+				newDBBinding[i].iOrdinal = i + 1;
+				newDBBinding[i].obLength = 0;
+				newDBBinding[i].obStatus = 0;
+				newDBBinding[i].pTypeInfo = NULL;
+				newDBBinding[i].pObject = NULL;
+				newDBBinding[i].pBindExt = NULL;
+				newDBBinding[i].dwPart = DBPART_VALUE;
+				newDBBinding[i].dwMemOwner = DBMEMOWNER_CLIENTOWNED;
+				newDBBinding[i].dwFlags = 0;
+				newDBBinding[i].bScale = 0;
+				newDBBinding[i].bPrecision = 11;
+			}
+			
+			// 기존 메모리 해제
+			delete[] m_pDBBinding;
+			delete[] m_pDBBindStatus;
+			
+			// 새로운 포인터 설정
+			m_pDBBinding = newDBBinding;
+			m_pDBBindStatus = newDBBindStatus;
+			m_uiBindingCapacity = newCapacity;
+		}
+	}
+}
+
+bool CDBBinding_v3::Bind( DBPARAMIOENUM DBParamIO, DBTYPEENUM DBType, unsigned int uiSize, unsigned int uiOffset )
+{
+	// 필요시 크기 확장
+	ResizeIfNeeded();
+
+	m_pDBBinding[ m_uiBindingCount ].obValue = uiOffset;
+	m_pDBBinding[ m_uiBindingCount ].eParamIO = DBParamIO;
+	m_pDBBinding[ m_uiBindingCount ].cbMaxLen = uiSize;	
+	m_pDBBinding[ m_uiBindingCount ].wType = DBType;
+	
+	m_uiBindingCount++;
+
+	return true;
+}
+
+void CDBBinding_v3::Reserve(unsigned int uiSize)
+{
+	if (uiSize > m_uiBindingCapacity)
+	{
+		if (m_bUsingStack && uiSize <= STACK_DB_BINDING_LIMIT)
+		{
+			// 스택 크기 내에서는 아무것도 하지 않음
+			return;
+		}
+		
+		if (m_bUsingStack)
+		{
+			// 스택에서 힙으로 전환
+			m_uiBindingCapacity = uiSize;
+			SwitchToHeap();
+		}
+		else
+		{
+			// 힙 메모리 확장
+			DBBINDING* newDBBinding = new DBBINDING[uiSize];
+			DBBINDSTATUS* newDBBindStatus = new DBBINDSTATUS[uiSize];
+			
+			// 기존 데이터 복사
+			if (m_uiBindingCount > 0)
+			{
+				memcpy(newDBBinding, m_pDBBinding, sizeof(DBBINDING) * m_uiBindingCount);
+				memcpy(newDBBindStatus, m_pDBBindStatus, sizeof(DBBINDSTATUS) * m_uiBindingCount);
+			}
+			
+			// 전체 영역 초기화
+			memset(newDBBinding + m_uiBindingCount, 0, sizeof(DBBINDING) * (uiSize - m_uiBindingCount));
+			memset(newDBBindStatus + m_uiBindingCount, 0, sizeof(DBBINDSTATUS) * (uiSize - m_uiBindingCount));
+			
+			// 새로운 바인딩 기본값 설정
+			for(unsigned int i = m_uiBindingCount; i < uiSize; i++)
+			{
+				newDBBinding[i].iOrdinal = i + 1;
+				newDBBinding[i].obLength = 0;
+				newDBBinding[i].obStatus = 0;
+				newDBBinding[i].pTypeInfo = NULL;
+				newDBBinding[i].pObject = NULL;
+				newDBBinding[i].pBindExt = NULL;
+				newDBBinding[i].dwPart = DBPART_VALUE;
+				newDBBinding[i].dwMemOwner = DBMEMOWNER_CLIENTOWNED;
+				newDBBinding[i].dwFlags = 0;
+				newDBBinding[i].bScale = 0;
+				newDBBinding[i].bPrecision = 11;
+			}
+			
+			// 기존 메모리 해제
+			delete[] m_pDBBinding;
+			delete[] m_pDBBindStatus;
+			
+			// 새로운 포인터 설정
+			m_pDBBinding = newDBBinding;
+			m_pDBBindStatus = newDBBindStatus;
+			m_uiBindingCapacity = uiSize;
+		}
+	}
+}
+
+void CDBBinding_v3::Clear()
+{
+	m_uiBindingCount = 0;
+	// 메모리는 유지하고 카운트만 리셋
+}
+
+void CDBBinding_v3::Reset()
+{
+	m_uiBindingCount = 0;
+	
+	// 힙 메모리를 사용 중이라면 스택으로 복귀
+	if (!m_bUsingStack)
+	{
+		delete[] m_pDBBinding;
+		delete[] m_pDBBindStatus;
+		
+		m_pDBBinding = m_StackBinding;
+		m_pDBBindStatus = m_StackBindStatus;
+		m_uiBindingCapacity = STACK_DB_BINDING_LIMIT;
+		m_bUsingStack = true;
+	}
+}
+```
+```ruby
+//Connection
+#pragma warning(disable:4996)
+
+#define DBINITCONSTANTS
+
+#include "StdAfx.h"
+#include "DBConnection_v3.h"
+#include "DBUtil.h"
+#include "../../server_Common/DXUTTimer.h"
+#ifndef _SQLOLEDB_H_
+#include <sqloledb.h>
+#endif
+
+#include <stdio.h>
+
+// 정적 변수 초기화 (단일 캐시 슬롯)
+DBConnectionCache CDBConnection_v3::m_Cache;
+
+CDBConnection_v3::CDBConnection_v3(void)
+{
+	m_pIDBInitialize = NULL;
+	m_pIDBProperties = NULL;
+	m_pIDBCreateSession = NULL;
+	m_pIDBCreateCommand = NULL;
+	m_pITransaction = NULL;
+	m_pICommandText = NULL;
+	m_pIAccessor = NULL;
+	m_pIRowset = NULL;
+	m_pRows = &m_hRows[0];
+	m_cNumRows = 0;
+
+	CoInitialize( NULL );
+}
+
+CDBConnection_v3::~CDBConnection_v3(void)
+{
+	Close();
+	CoUninitialize();
+}
+
+void CDBConnection_v3::Close()
+{
+	if( m_pIAccessor != NULL )
+	{
+		m_pIAccessor->Release();
+		m_pIAccessor = NULL;
+	}
+	
+	if( m_pICommandText != NULL )
+	{
+		m_pICommandText->Release();
+		m_pICommandText = NULL;
+	}
+	
+	if( m_pIDBCreateCommand != NULL )
+	{
+		m_pIDBCreateCommand->Release();
+		m_pIDBCreateCommand = NULL;
+	}
+	
+	if( m_pIDBCreateSession != NULL )
+	{
+		m_pIDBCreateSession->Release();
+		m_pIDBCreateSession = NULL;
+	}
+
+	if( m_pITransaction != NULL )
+	{
+		m_pITransaction->Release();
+		m_pITransaction = NULL;
+	}
+
+	if( m_pIDBProperties != NULL )
+	{
+	    m_pIDBProperties->Release();
+		m_pIDBProperties = NULL;
+	}
+	
+	if( m_pIDBInitialize != NULL )
+	{
+		m_pIDBInitialize->Uninitialize();
+		m_pIDBInitialize->Release();
+		m_pIDBInitialize = NULL;
+	}
+}
+
+bool CDBConnection_v3::Connect( WCHAR *wDataSource, WCHAR *wCatalog, WCHAR *wUserID, WCHAR *wPassword )
+{
+	Close();
+
+	HRESULT hr;
+
+	hr = CoCreateInstance(  CLSID_SQLOLEDB,
+							NULL,
+							CLSCTX_INPROC_SERVER,
+							IID_IDBInitialize,
+							(void **) &m_pIDBInitialize );
+
+	if( FAILED(hr) ) 
+		return false;
+
+	DBPROP   InitProperties[4];
+
+	for(int i = 0; i < 4; i++)
+        VariantInit(&InitProperties[i].vValue);
+  
+    //Server name.
+    InitProperties[0].dwPropertyID  = DBPROP_INIT_DATASOURCE;
+    InitProperties[0].vValue.vt     = VT_BSTR;
+	InitProperties[0].vValue.bstrVal= SysAllocString( wDataSource );
+    InitProperties[0].dwOptions     = DBPROPOPTIONS_REQUIRED;
+    InitProperties[0].colid         = DB_NULLID;
+
+    //Database.
+    InitProperties[1].dwPropertyID  = DBPROP_INIT_CATALOG;
+    InitProperties[1].vValue.vt     = VT_BSTR;
+    InitProperties[1].vValue.bstrVal= SysAllocString( wCatalog );
+	InitProperties[1].dwOptions     = DBPROPOPTIONS_REQUIRED;
+    InitProperties[1].colid         = DB_NULLID; 
+
+    //Username (login).
+    InitProperties[2].dwPropertyID  = DBPROP_AUTH_USERID; 
+    InitProperties[2].vValue.vt     = VT_BSTR;
+	InitProperties[2].vValue.bstrVal= SysAllocString( wUserID );
+    InitProperties[2].dwOptions     = DBPROPOPTIONS_REQUIRED;
+    InitProperties[2].colid         = DB_NULLID;
+
+    //Password.
+    InitProperties[3].dwPropertyID  = DBPROP_AUTH_PASSWORD;
+    InitProperties[3].vValue.vt     = VT_BSTR;
+	InitProperties[3].vValue.bstrVal= SysAllocString( wPassword);
+    InitProperties[3].dwOptions     = DBPROPOPTIONS_REQUIRED;
+    InitProperties[3].colid         = DB_NULLID;
+
+    m_rgInitPropSet[0].guidPropertySet = DBPROPSET_DBINIT;
+    m_rgInitPropSet[0].cProperties    = 4;
+    m_rgInitPropSet[0].rgProperties   = InitProperties;
+
+    hr = m_pIDBInitialize->QueryInterface(IID_IDBProperties, 
+                                   (void **)&m_pIDBProperties );
+	if (FAILED(hr))
+	{
+		DumpErrorInfo( m_pIDBInitialize, IID_IDBInitialize );
+		return false;
+	}
+
+	hr = m_pIDBProperties->SetProperties(1, m_rgInitPropSet); 
+	if (FAILED(hr)) 
+	{
+		DumpErrorInfo( m_pIDBProperties, IID_IDBProperties );
+		return false;
+	}
+
+ 	for(int i = 0; i < 4; i++)
+		VariantClear(&InitProperties[i].vValue);
+
+	m_pIDBProperties->Release();
+	m_pIDBProperties = NULL;
+
+	if(FAILED(m_pIDBInitialize->Initialize())) 
+	{
+		DumpErrorInfo( m_pIDBInitialize, IID_IDBInitialize );
+		return false;
+	}
+
+	//create session
+    if(FAILED(m_pIDBInitialize->QueryInterface(
+                                IID_IDBCreateSession,
+                                (void**) &m_pIDBCreateSession))) 
+	{
+		return false;
+	}
+
+	if(FAILED(m_pIDBCreateSession->CreateSession(
+                                     NULL, 
+                                     IID_IDBCreateCommand, 
+                                     (IUnknown**) &m_pIDBCreateCommand)))  
+	{
+		DumpErrorInfo( m_pIDBCreateSession, IID_IDBCreateSession );
+		return false;
+	}
+
+    if(FAILED(m_pIDBCreateCommand->CreateCommand(
+                                    NULL, 
+                                    IID_ICommandText, 
+                                    (IUnknown**) &m_pICommandText)))  
+	{
+		DumpErrorInfo( m_pIDBCreateCommand, IID_IDBCreateCommand );
+		return false;
+	}
+
+	if (FAILED(hr = m_pIDBCreateCommand->QueryInterface(IID_ITransactionLocal,
+					(void**) &m_pITransaction)))   
+	{
+		DumpErrorInfo( m_pIDBCreateCommand, IID_IDBCreateCommand );
+		return false;
+	}
+
+	return true;
+}
+
+std::string CDBConnection_v3::GenerateCacheKey(const char* szFile, int iLine)
+{
+	char key[512];
+	sprintf(key, "%s_%d", szFile, iLine);
+	return std::string(key);
+}
+
+bool CDBConnection_v3::LoadConnectionInfoFromCache(const std::string& cacheKey, DBConnectionCache& info)
+{
+	// 단일 캐시 슬롯 확인
+	if (m_Cache.bValid && m_Cache.cacheKey == cacheKey)
+	{
+		// 캐시 유효성 검사 (5분 이내)
+		DWORD currentTime = GetTickCount();
+		if (currentTime - m_Cache.dwLastUsed < 300000)  // 5분
+		{
+			info = m_Cache;
+			info.dwLastUsed = currentTime;  // 사용 시간 업데이트
+			return true;
+		}
+		else
+		{
+			// 만료된 캐시 무효화
+			m_Cache.bValid = false;
+		}
+	}
+	
+	return false;
+}
+
+void CDBConnection_v3::SaveConnectionInfoToCache(const std::string& cacheKey, 
+	const std::wstring& wDataSource, const std::wstring& wCatalog, 
+	const std::wstring& wUserID, const std::wstring& wPassword)
+{
+	// 단일 캐시 슬롯에 저장
+	m_Cache.cacheKey = cacheKey;
+	m_Cache.wDataSource = wDataSource;
+	m_Cache.wCatalog = wCatalog;
+	m_Cache.wUserID = wUserID;
+	m_Cache.wPassword = wPassword;
+	m_Cache.dwLastUsed = GetTickCount();
+	m_Cache.bValid = true;
+}
+
+void CDBConnection_v3::ClearConnectionCache()
+{
+	m_Cache.bValid = false;
+	m_Cache.cacheKey.clear();
+	m_Cache.wDataSource.clear();
+	m_Cache.wCatalog.clear();
+	m_Cache.wUserID.clear();
+	m_Cache.wPassword.clear();
+}
+
+bool CDBConnection_v3::Connect_byGNIDBInfoFile_Cached( char *szFile, int iLine )
+{
+	std::string cacheKey = GenerateCacheKey(szFile, iLine);
+	DBConnectionCache info;
+	
+	// 캐시에서 정보 찾기
+	if (LoadConnectionInfoFromCache(cacheKey, info))
+	{
+		return Connect((WCHAR*)info.wDataSource.c_str(), 
+					   (WCHAR*)info.wCatalog.c_str(), 
+					   (WCHAR*)info.wUserID.c_str(), 
+					   (WCHAR*)info.wPassword.c_str());
+	}
+	
+	// 캐시에 없으면 파일에서 읽기
+	FILE *fp = fopen( szFile, "r" );
+	if( fp == NULL ) 
+	{
+		printf( "\n\tcannot open file(%s) ... \t", szFile );
+		return false;
+	}
+
+	wchar_t		string[4096];
+	wchar_t		wIP[256];	
+	wchar_t		wDBName[256];	
+	wchar_t		wID[256];	
+	wchar_t		wPass[256];	
+	wchar_t*	token;
+	wchar_t		splitter[] = L" \n\t";
+	int			iLineCount = 0;
+		
+	while( 1 )
+	{
+		if( fgetws( string, 4096 , fp ) == NULL ) 
+		{
+			fclose( fp );
+			return false;
+		}
+
+		if( string[ 0 ] == ';' || (0==wcscmp( string, L"\n" )) ) 
+			continue;
+			
+		// ip
+		token = wcstok( string, splitter );	
+		if( token == NULL )		continue;
+		wcscpy( wIP, token );
+
+		// dbname
+		token = wcstok( NULL, splitter );	
+		if( token == NULL )		continue;
+		wcscpy( wDBName, token );
+
+		// id
+		token = wcstok( NULL, splitter );	
+		if( token == NULL )		continue;
+		wcscpy( wID, token );
+
+		// pass
+		token = wcstok( NULL, splitter );	
+		if( token == NULL )		continue;
+		wcscpy( wPass, token );
+
+		if( iLineCount == iLine )
+		{
+			fclose( fp );
+			
+			// 캐시에 저장
+			SaveConnectionInfoToCache(cacheKey, wIP, wDBName, wID, wPass);
+			
+			return Connect( wIP, wDBName, wID, wPass );
+		}
+		iLineCount++;
+	};
+	fclose( fp );
+
+	return false;
+}
+
+bool CDBConnection_v3::Connect_byGNIDBInfoFile( char *szFile, int iLine )
+{
+	// 기본 버전 (호환성 유지)
+	FILE *fp = fopen( szFile, "r" );
+	if( fp == NULL ) 
+	{
+		printf( "\n\tcannot open file(%s) ... \t", szFile );
+		return false;
+	}
+
+	wchar_t		string[4096];
+	wchar_t		wIP[256];	
+	wchar_t		wDBName[256];	
+	wchar_t		wID[256];	
+	wchar_t		wPass[256];	
+	wchar_t*	token;
+	wchar_t		splitter[] = L" \n\t";
+	int			iLineCount = 0;
+		
+	while( 1 )
+	{
+		if( fgetws( string, 4096 , fp ) == NULL ) 
+		{
+			fclose( fp );
+			return false;
+		}
+
+		if( string[ 0 ] == ';' || (0==wcscmp( string, L"\n" )) ) 
+			continue;
+			
+		// ip
+		token = wcstok( string, splitter );	
+		if( token == NULL )		continue;
+		wcscpy( wIP, token );
+
+		// dbname
+		token = wcstok( NULL, splitter );	
+		if( token == NULL )		continue;
+		wcscpy( wDBName, token );
+
+		// id
+		token = wcstok( NULL, splitter );	
+		if( token == NULL )		continue;
+		wcscpy( wID, token );
+
+		// pass
+		token = wcstok( NULL, splitter );	
+		if( token == NULL )		continue;
+		wcscpy( wPass, token );
+
+		if( iLineCount == iLine )
+		{
+			fclose( fp );
+			return Connect( wIP, wDBName, wID, wPass );
+		}
+		iLineCount++;
+	};
+	fclose( fp );
+
+	return false;
+}
+
+bool CDBConnection_v3::SetCommandText( ICommandText* pICommandText,WCHAR* wCmdString )
+{
+	if( pICommandText == NULL ) 
+		return false;
+	
+	if( FAILED(pICommandText->SetCommandText(DBGUID_DBSQL,wCmdString)) ) 
+		return false;
+
+	return true;
+}
+
+bool CDBConnection_v3::Execute()
+{
+	HRESULT hr;
+	hr = m_pICommandText->Execute(NULL,
+							 IID_IRowset,
+							 NULL,
+							 &m_cNumRows,
+							 (IUnknown**)&m_pIRowset);
+
+	if (FAILED(hr)) 
+	{
+		DumpErrorInfo( m_pICommandText, IID_ICommandText );
+		return false;
+	}
+
+	return true;
+}
+
+bool CDBConnection_v3::ExecuteSQL( WCHAR *wSQLText )
+{
+	SetCommandText( m_pICommandText, wSQLText );
+	bool bReturn = Execute();
+	return bReturn;
+}
+```
+```ruby
+//Proc
+#include "StdAfx.h"
+#include "NetGlobal.h"
+#include "StoredProcedure_v3.h"
+#include "DBConnection_v3.h"
+#include "DBUtil.h"
+#include "../../server_Common/Global.h"
+#include "../../server_Common/DXUTTimer.h"
+
+// 정적 변수 초기화
+float	CStoredProcedure_v3::m_fStandardTime = 0;
+float	CStoredProcedure_v3::m_fLogThreshold = 0.3f;  // 기본 0.3초 (v2 대비 단축)
+bool CStoredProcedure_v3::m_bLogInitialized = false;
+
+#ifndef _ADMINPAGE_DLL
+#include "../../server_Common/CSVFile_SMS.h"
+#include "../../server_Common/INIFile_Setting.h"
+
+double		g_dSendSMSTime_v3 = 0;
+
+void SendSMS_v3(char *szProcedureName)
+{
+	printf( "SMS SENT	11\n");
+	if(0 == g_INIFile_Setting.m_iSMSState)
+		return;
+
+	// 마지막으로 3분안에 보냈다면 메세지 보내지않음
+	if( g_Timer.GetTime() - g_dSendSMSTime_v3 < 180.0f )
+		return;
+}
+#endif
+
+CStoredProcedure_v3::CStoredProcedure_v3(void)
+{
+	m_fpLogFile = NULL;
+	m_pParamBinding = NULL;
+	m_pRowsetBinding = NULL;
+	m_hRowAccessor = NULL;
+	m_hAccessor = NULL;
+	m_pDBConnection = NULL;
+	m_pICommandText = NULL;
+	m_pIAccessor = NULL;
+	m_pIRowset = NULL;
+
+	// 인라인 로그 버퍼 초기화
+	m_iLogBufferCount = 0;
+	memset(m_LogBuffer, 0, sizeof(InlineLogBuffer) * INLINE_LOG_BUFFER_SIZE);
+
+	// 로그 시스템 초기화 (한번만)
+	if (!m_bLogInitialized)
+	{
+		m_bLogInitialized = true;
+	}
+}
+
+CStoredProcedure_v3::~CStoredProcedure_v3(void)
+{
+	FlushLogBuffer();  // 남은 로그 플러시
+}
+
+void CStoredProcedure_v3::Close()
+{
+	if( m_pParamBinding )
+	{
+		delete m_pParamBinding;
+		m_pParamBinding = NULL;
+	}
+
+	if( m_pRowsetBinding )
+	{
+		delete m_pRowsetBinding;
+		m_pRowsetBinding = NULL;
+	}
+
+	if( m_pICommandText )
+	{
+		m_pICommandText->Release();
+		m_pICommandText = NULL;
+	}
+
+	if( m_pIAccessor )
+	{
+		m_pIAccessor->Release();
+		m_pIAccessor = NULL;
+	}
+}
+
+bool CStoredProcedure_v3::AddParamBinding( DBTYPEENUM DBType, unsigned int uiSize, unsigned int uiOffset, bool bOutputParam )
+{
+	if( m_pParamBinding == NULL )
+	{
+		m_pParamBinding = new CDBBinding_v3;
+	}
+
+	DBPARAMIOENUM	DBParamIO;
+	if( bOutputParam == true )	DBParamIO = DBPARAMIO_OUTPUT;
+	else						DBParamIO = DBPARAMIO_INPUT;
+
+	return m_pParamBinding->Bind( DBParamIO, DBType, uiSize, uiOffset );
+}
+
+bool CStoredProcedure_v3::AddRowsetBinding( DBTYPEENUM DBType, unsigned int uiSize, unsigned int uiOffset )
+{
+	if( m_pRowsetBinding == NULL )
+	{
+		m_pRowsetBinding = new CDBBinding_v3;
+	}
+
+	return m_pRowsetBinding->Bind( DBPARAMIO_NOTPARAM, DBType, uiSize, uiOffset );
+}
+
+bool CStoredProcedure_v3::Init( CDBConnection_v3* pDBConnection, WCHAR* wCmdString )
+{
+	if( pDBConnection == NULL ) 
+		return false;
+
+	WideCharToMultiByte( CP_ACP, 0, wCmdString, -1, m_szInitialString, 256, NULL, NULL );
+
+	m_pDBConnection = pDBConnection;
+
+    if( FAILED(pDBConnection->GetCreateCommand()->CreateCommand( 
+														NULL, 
+														IID_ICommandText, 
+														(IUnknown**) &m_pICommandText)) )  
+	{
+		printf( "CreateCommand() Failed\n" );
+		return false;
+	}
+
+	if( pDBConnection->SetCommandText( m_pICommandText, wCmdString ) == false ) 
+	{
+		printf( "SetCommandText() Failed\n" );
+		return false;
+	}
+
+	return CreateAccessor();
+}
+
+bool CStoredProcedure_v3::CreateAccessor()
+{
+	if( FAILED(m_pICommandText->QueryInterface(IID_IAccessor, (void**)&(m_pIAccessor))) ) 
+	{
+		DumpErrorInfo( m_pICommandText, IID_ICommandText );
+		return false;
+	}
+
+	if( m_pParamBinding )
+	{
+		if( FAILED(m_pIAccessor->CreateAccessor( DBACCESSOR_PARAMETERDATA, m_pParamBinding->m_uiBindingCount, m_pParamBinding->m_pDBBinding,
+			0, &m_hAccessor, m_pParamBinding->m_pDBBindStatus)) )
+			return false;
+	}
+
+	if( m_pRowsetBinding )
+	{
+		if(FAILED(m_pIAccessor->CreateAccessor( DBACCESSOR_ROWDATA, m_pRowsetBinding->m_uiBindingCount, m_pRowsetBinding->m_pDBBinding,
+			0, &m_hRowAccessor, m_pRowsetBinding->m_pDBBindStatus)) )
+			return false;
+	}
+
+	return true;
+}
+
+bool CStoredProcedure_v3::Execute( void *pParam, void *pRowset )
+{
+	// 실행시간이 설정되어있으면 실행시간 측정
+	double	dTime = g_Timer.GetTime();
+
+	HRESULT		hr;
+	DBPARAMS	Params;
+	DBROWCOUNT	cNumRows = 0;
+
+	m_pResultRowset = pRowset;
+
+	if( pParam == NULL )	// 파라미터를 NULL로 하면 DB함수 호출할때 익셉션이 발생하기 때문에 그냥 클래스 자신을 파라미터로 사용
+	{
+		Params.pData = this;
+	}
+	else
+	{
+		Params.pData = pParam;
+	}
+	Params.cParamSets = 1;
+	Params.hAccessor  = m_hAccessor;
+
+	m_iRecordCount		= 0;
+	m_iCurrentRecord	= 0;
+	
+	//Execute the command.
+	if( FAILED(hr = m_pICommandText->Execute( NULL, IID_IRowset, &Params, &cNumRows, (IUnknown **) &(m_pIRowset))) )
+	{
+		DumpErrorInfo( m_pICommandText, IID_ICommandText );
+
+		m_pDBConnection->OnProcedureExecuteFailed( m_szInitialString );
+
+#ifndef _ADMINPAGE_DLL
+		SendSMS_v3(m_szInitialString);
+#endif
+		return false;
+	}
+
+	// 실행시간이 설정되어있으면 실행시간 측정
+	double dDiffTime = g_Timer.GetTime()-dTime;
+
+	if( m_fStandardTime > 0 )
+	{
+		if( dDiffTime >= m_fStandardTime )
+		{
+			printf( "DB PROC TIME : %40s ... %f\n", m_szInitialString, dDiffTime );
+		}
+	}
+
+	// 로그 임계값 검사 (v3에서 0.3초로 단축)
+	if( dDiffTime >= m_fLogThreshold )
+	{
+		LogFile_Printf( "DB PROC TIME : %40s ... %f\n", m_szInitialString, dDiffTime );
+	}
+
+	return true;
+}
+
+bool CStoredProcedure_v3::GetFirstRecord()
+{
+	// 고정 배치 크기로 레코드 가져오기 (동적 계산 오버헤드 제거)
+	IRowset *pRowset = m_pIRowset;
+	if( pRowset == NULL )
+		return false;
+
+	if( FAILED( pRowset->GetNextRows( NULL, 0, BATCH_SIZE_FIXED, &m_iRecordCount, &m_pDBConnection->m_pRows)) )
+	{
+		return false;
+	}
+
+	// 첫번째 레코드 데이터 가져오기
+	m_iCurrentRecord = 0;
+
+	if( m_iRecordCount == 0 )
+		return false;
+
+	if( m_pResultRowset == NULL )
+		return false;
+
+	if(FAILED( m_pIRowset->GetData(m_pDBConnection->m_hRows[m_iCurrentRecord], m_hRowAccessor, m_pResultRowset )))
+		return false;
+
+	return true;
+}
+
+bool CStoredProcedure_v3::GetNextRecord()
+{
+	if( m_iRecordCount == 0 )
+		return false;
+
+	if( m_pResultRowset == NULL )
+		return false;
+
+	m_iCurrentRecord ++;
+	if( m_iCurrentRecord >= m_iRecordCount )
+	{
+		// 현재 가져온 레코드들 해제
+		m_pIRowset->ReleaseRows( m_iRecordCount, m_pDBConnection->m_pRows, NULL, NULL, NULL );
+
+		// 다음 고정 배치 크기로 레코드 가져오기
+		IRowset *pRowset = m_pIRowset;
+		if( pRowset == NULL )
+			return false;
+
+		if( FAILED( pRowset->GetNextRows( NULL, 0, BATCH_SIZE_FIXED, &m_iRecordCount, &m_pDBConnection->m_pRows)) )
+		{
+			if( pRowset != NULL )	
+				pRowset->Release();
+			return false;
+		}
+		if( m_iRecordCount == 0 )
+			return false;
+
+		m_iCurrentRecord = 0;	// 새로운 배치 레코드 처리시작
+	}
+
+	if(FAILED( m_pIRowset->GetData(m_pDBConnection->m_hRows[m_iCurrentRecord], m_hRowAccessor, m_pResultRowset )))
+		return false;
+
+	return true;
+}
+
+void CStoredProcedure_v3::ReleaseDBRecords()
+{
+	if( m_pIRowset != NULL )	
+	{
+		m_pIRowset->Release();
+		m_pIRowset = NULL;
+	}
+}
+
+void CStoredProcedure_v3::FlushLogBuffer()
+{
+	if (m_iLogBufferCount > 0 && m_fpLogFile != NULL)
+	{
+		for (int i = 0; i < m_iLogBufferCount; i++)
+		{
+			fprintf(m_fpLogFile, "%s", m_LogBuffer[i].szLogData);
+		}
+		fflush(m_fpLogFile);
+		m_iLogBufferCount = 0;
+	}
+}
+
+void CStoredProcedure_v3::LogFile_Printf( char * strText, ... )
+{
+	// 로그 데이터 준비
+	char strData[4096];
+	va_list vargs;
+	va_start( vargs, strText );
+	vsprintf( strData, strText, vargs );
+	va_end( vargs );
+
+	// 현재 시간
+	char	szTime[256];
+	time_t	currentTime = time(0);
+	strftime( szTime, 256, "%Y-%m-%d %H:%M:%S", localtime( &currentTime ) );
+
+	// 최종 로그 문자열
+	char szFinalLog[4096];
+	sprintf(szFinalLog, "%s : %s", szTime, strData);
+
+	// 인라인 버퍼에 로그 추가
+	if (m_iLogBufferCount < INLINE_LOG_BUFFER_SIZE)
+	{
+		strcpy(m_LogBuffer[m_iLogBufferCount].szLogData, szFinalLog);
+		m_LogBuffer[m_iLogBufferCount].dwTimestamp = GetTickCount();
+		m_iLogBufferCount++;
+	}
+
+	// 버퍼가 절반 이상 차거나 3초가 지나면 플러시 (v3 단축)
+	bool bShouldFlush = false;
+	if (m_iLogBufferCount >= INLINE_LOG_BUFFER_SIZE / 2)
+		bShouldFlush = true;
+	else if (m_iLogBufferCount > 0)
+	{
+		DWORD currentTick = GetTickCount();
+		if (currentTick - m_LogBuffer[0].dwTimestamp > 3000)  // 3초
+			bShouldFlush = true;
+	}
+
+	if (bShouldFlush)
+	{
+		// 로그 파일이 없으면 생성
+		if( m_fpLogFile == NULL )
+		{
+			char	szTime[256];
+			time_t	currentTime = time(0);
+			strftime( szTime, 256, "%Y%m%d_%H%M%S", localtime( &currentTime ) );
+
+			char	szLogDir[256];
+			sprintf( szLogDir, "%s\\log",g_Global.m_szModulePath );
+			CreateDirectoryA( szLogDir, NULL ); 
+
+			char szLogFile[256];
+			sprintf( szLogFile, "%s\\log\\DB_Execute_Log_%s.txt", 
+				g_Global.m_szModulePath, 
+				szTime 
+				);
+			m_fpLogFile = fopen( szLogFile, "a" );
+		}
+
+		FlushLogBuffer();
+
+		// 로그 파일 크기 체크 (더 간단)
+		if( m_fpLogFile )
+		{
+			static DWORD lastSizeCheck = 0;
+			DWORD currentTick = GetTickCount();
+			
+			if (currentTick - lastSizeCheck > 120000)  // 2분마다 체크 (v3 간격 확대)
+			{
+				fseek( m_fpLogFile, 0, SEEK_END );
+				long lFileSize = ftell( m_fpLogFile );
+				if( lFileSize >= 20971520 )  // 20MB로 확대 (v3 파일 크기 증가)
+				{
+					fclose( m_fpLogFile );
+
+					// 파일 크기를 넘는다면 새로운 파일 생성
+					char	szTime[256];
+					time_t	currentTime = time(0);
+					strftime( szTime, 256, "%Y%m%d_%H%M%S", localtime( &currentTime ) );
+
+					char szLogFile[256];
+					sprintf( szLogFile, "%s\\log\\DB_Execute_Log_%s.txt", 
+						g_Global.m_szModulePath, 
+						szTime 
+						);
+					m_fpLogFile = fopen( szLogFile, "a" );
+				}
+				lastSizeCheck = currentTick;
+			}
+		}
+	}
+}
+```
+</details>
+
+
+<img width="1146" height="761" alt="image" src="https://github.com/user-attachments/assets/69dc3be0-dc52-4356-be59-262911232a7b" />
+클로드 코드의 개선내용에 대해 비교를 해보았다. 성능적으로 분명 좋아졌을 텐데, 
+
+<img width="1036" height="1028" alt="image" src="https://github.com/user-attachments/assets/e7878a61-b65a-4a47-9e20-52df114c4cfe" />
+결과는 두 방식 간의 성능 차이는 명확하게 드러나지 않았다. 그 이유는 DBServer-OLEDB 연결 속도가 매우 빨라 지연을 유발할 만한 요인이 없었기 때문이었다. 약간의 지연이 발생해 Log들이 다량 발생했다면 아마 성능차이는 많이 났을 것으로 보지만, 기존의 로직도 단순 프로시저 호출로 느려지지는 않는 것으로 확인 되었다.
+
+결국 DB에서 지연이 발생해 RowData의 사용방식이 힘들다 한다는 것은, 다른 곳에 이유가 있음을 알게되었다.
+
+#### 4-2. User SaveDB의 침범
+ 현재 우리의 서버는 싱글 코어로 돌아가고 있다. 녹화된 영상을 보면 Load의 시간이 그리 지연되지는 않는데, 문제는 주기적으로 User의 데이터를 저장할 때 2초 가량씩 지연이 발생하는 것을 관측 하였다.
