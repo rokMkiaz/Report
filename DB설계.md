@@ -2613,6 +2613,7 @@ void CWishingList::SaveWishingData(CUnitPC* pPC, DCP_WISHING_SAVE_DATA& pSavePac
 }
 
 ```
+기본적으로 Save부분(컨텐츠상 진행에 의한 저장), Loop Save 부분이 나뉘게 되었다. Loop Save의 경우 수많은 데이터를 한번에 저장하기 때문에 별도의 함수가 필요하였다.
 
 ```ruby
 void CDBManager::ON_DCM_SAVE_PC_2(int iClient, WORD wExtraHeader, BYTE* pPacket)
@@ -2640,6 +2641,8 @@ void CDBManager::ON_DCM_SAVE_PC_2(int iClient, WORD wExtraHeader, BYTE* pPacket)
 	CDBManager::ON_BANGPA_REQUEST_SAVE(iClient, wExtraHeader, (BYTE*)&pMsg->sendBangpaRequest);
 
 }
+수신부는 기존 코드 재활용이 가능하여 그대로 가져다 사용하였다.
+
 ```
 
 </details>
