@@ -2643,11 +2643,12 @@ void CDBManager::ON_DCM_SAVE_PC_2(int iClient, WORD wExtraHeader, BYTE* pPacket)
 ```
 
 </details>
-해당 코드로 변경하며, 분명히 성능상 30%는 증가한 것으로 측정이 된다. 하지만, 코드의 중복되는 부분들이 늘어났다. 성능이냐 유지보수냐를 보았을때, 멀티스레드 환경이 필요한 것으로 보인다..
+
+해당 코드로 변경하며 분명히 성능상 30%는 증가한 것으로 측정이 된다. 하지만, 코드의 중복되는 부분들이 늘어났으며, 성능이냐 유지보수냐를 보았을때 멀티스레드 환경이면 해결될 문제인 것으로 보인다.
 
 
 <details>
-<summary>기존 호출</summary>
+<summary></summary>
     
 ```ruby
 ```
