@@ -2541,3 +2541,114 @@ void CStoredProcedure_v3::LogFile_Printf( char * strText, ... )
 
 #### 4-2. User SaveDB의 침범
  현재 우리의 서버는 싱글 코어로 돌아가고 있다. 녹화된 영상을 보면 Load의 시간이 그리 지연되지는 않는데, 문제는 주기적으로 User의 데이터를 저장할 때 2초 가량씩 지연이 발생하는 것을 관측 하였다. 현재 여러 패킷으로 세이브하는 방식은 싱글스레드로 통신을 하는 서버에서는 많은 성능감소를 발생시키는 요소로 보이고, AI를 활용하여 확인해봐도 패킷을 하나로 보내는 것이 효율이 더 좋은 것으로 판단되었다.
+<details>
+<summary>개선된 호출 코드</summary>
+	
+```ruby
+struct DCP_SAVE_PC_2 : public SIOCPPacket
+{
+	DCP_SAVE_PC_2()
+	{
+		m_Header.wID[PACKET_HEADER] = DCM_SAVE_PC_2;
+		sizeof(DCP_SAVE_PC_2);
+
+	}
+	DCP_SINSU_LIST sendSuhoAvatar;
+	DCP_DAILYDUNGEON_SAVE sendDailyDungeonInfo;
+	DCP_Save_QuestInfo sendQuestInfo;
+	DCP_Save_Accumulate_Data sendAccumulate;
+	DCP_SAVE_PK_SETTING	sendPkInfo;
+	DCP_SAVE_TRAINING_TIME_LIST sendTrainingCenterList;
+	DCP_SAVE_DUNGEON_LIST sendDungeonList;
+	DCP_SAVE_SEASONPASS sendSeasonPass;
+	DCP_COMBINE_COUNT_ALL_SAVE sendComBineFail;
+	DCP_SOULFIRELIST_SAVE sendSoulFire;
+	DCP_USER_PRESET_SAVE sendPreset;
+	DCP_SAVE_ALCHEMY sendAlchemy;
+	DCP_WISHING_SAVE_DATA sendWishing;
+	DCP_SAVE_MAPAE sendMapae;
+	DCP_SAVE_MAPAE_COLLECTION sendMapaeCollection;
+	DCP_SAVE_PVE_SCORE sendPveScore;
+	DCP_SAVEPC_COLLECTION_DATA sendCollection;
+	DSP_SAVE_GYEONGMAEK_LIST sendGyeongmaekList;
+	DCP_BANGPA_REQUEST_SAVE sendBangpaRequest;
+};
+```
+패킷은 기존 19+ 로 되던 패킷을 하나의 패킷으로 송신하게 바꾸었다.
+ 
+```ruby
+void CWishingList::SaveWishingData(CUnitPC* pPC)
+{
+	if (pPC == NULL)
+	{
+		return;
+	}
+	DCP_WISHING_SAVE_DATA sendDB;
+	memset(sendDB._i32WishingCount, 0x00, sizeof(INT32)* MAX_NECESSARY_TITLE);
+	memset(sendDB._stonebuffData, 0x00, sizeof(stWishingStoneBuffData) * MAX_NECESSARY_TITLE * MAX_WISHING_STONE_COUNT);
+
+
+	sendDB._dwcharunique = pPC->GetCharacterUnique();
+	memcpy(sendDB._i32WishingCount, _i32WishingCount, sizeof(INT32) * MAX_NECESSARY_TITLE);
+	memcpy(sendDB._stonebuffData, _stone, sizeof(stWishingStoneBuffData) * MAX_NECESSARY_TITLE * MAX_WISHING_STONE_COUNT);
+
+	pPC->WriteGameDB((BYTE*)&sendDB, sizeof(DCP_WISHING_SAVE_DATA));
+}
+
+void CWishingList::SaveWishingData(CUnitPC* pPC, DCP_WISHING_SAVE_DATA& pSavePacket)
+{
+	if (pPC == NULL )
+	{
+		return;
+	}
+	memset(pSavePacket._i32WishingCount, 0x00, sizeof(INT32) * MAX_NECESSARY_TITLE);
+	memset(pSavePacket._stonebuffData, 0x00, sizeof(stWishingStoneBuffData) * MAX_NECESSARY_TITLE * MAX_WISHING_STONE_COUNT);
+
+
+	pSavePacket._dwcharunique = pPC->GetCharacterUnique();
+	memcpy(pSavePacket._i32WishingCount, _i32WishingCount, sizeof(INT32) * MAX_NECESSARY_TITLE);
+	memcpy(pSavePacket._stonebuffData, _stone, sizeof(stWishingStoneBuffData) * MAX_NECESSARY_TITLE * MAX_WISHING_STONE_COUNT);
+
+
+}
+
+```
+
+```ruby
+void CDBManager::ON_DCM_SAVE_PC_2(int iClient, WORD wExtraHeader, BYTE* pPacket)
+{
+	DCP_SAVE_PC_2* pMsg = (DCP_SAVE_PC_2*)pPacket;
+
+	CDBManager::ON_SAVE_SINSULIST(iClient, wExtraHeader, (BYTE*)&pMsg->sendSuhoAvatar);
+	CDBManager::ON_DAILYDUGEON_SAVE(iClient, wExtraHeader, (BYTE*)&pMsg->sendDailyDungeonInfo);
+	CDBManager::ON_DCM_SAVE_QUESTINFO( iClient, wExtraHeader, (BYTE *)&pMsg->sendQuestInfo );
+	CDBManager::ON_DCM_SAVE_ACCUMULATE(iClient, wExtraHeader, (BYTE*)&pMsg->sendAccumulate);
+	CDBManager::ON_DCM_SAVE_PK_SETTING(iClient, wExtraHeader, (BYTE *)&pMsg->sendPkInfo);
+	CDBManager::ON_SAVE_TRAINING_PERSONAL(iClient, wExtraHeader, (BYTE*)&pMsg->sendTrainingCenterList);
+	CDBManager::ON_DCM_SAVE_DUNGEON_LIST(iClient, wExtraHeader, (BYTE *)&pMsg->sendDungeonList);
+	CDBManager::ON_DCM_SAVE_SEASONPASS(iClient, wExtraHeader, (BYTE *)&pMsg->sendSeasonPass);
+	CDBManager::ON_COMBINE_COUNT_ALL_SAVE(iClient, wExtraHeader, (BYTE*)&pMsg->sendComBineFail);
+	CDBManager::ON_SOULFIRE_LIST_SAVE(iClient, wExtraHeader, (BYTE*)&pMsg->sendSoulFire);
+	CDBManager::ON_PRESET_LIST_SAVE(iClient, wExtraHeader, (BYTE*)&pMsg->sendPreset);
+	CDBManager::ON_ALCHEMY_SAVE(iClient, wExtraHeader, (BYTE*)&pMsg->sendAlchemy);
+	CDBManager::ON_WISHING_SAVE(iClient, wExtraHeader, (BYTE *)&pMsg->sendWishing);
+	CDBManager::ON_MAPAE_LIST_SAVE(iClient, wExtraHeader, (BYTE*)&pMsg->sendMapae);
+	CDBManager::ON_MAPAE_COLLECTION_LIST_SAVE(iClient, wExtraHeader, (BYTE*)&pMsg->sendMapaeCollection);
+	CDBManager::ON_SAVE_PVE_SCORE(iClient, wExtraHeader, (BYTE*)&pMsg->sendPveScore);
+	CDBManager::ON_DCM_SAVEPC_COLLECTION_DATA(iClient, wExtraHeader, (BYTE*)&pMsg->sendCollection);
+	CDBManager::ON_DSM_SAVE_GYEONGMAEK_LIST(iClient, wExtraHeader, (BYTE*)&pMsg->sendGyeongmaekList);
+	CDBManager::ON_BANGPA_REQUEST_SAVE(iClient, wExtraHeader, (BYTE*)&pMsg->sendBangpaRequest);
+
+}
+```
+
+</details>
+해당 코드로 변경하며, 분명히 성능상 30%는 증가한 것으로 측정이 된다. 하지만, 코드의 중복되는 부분들이 늘어났다. 성능이냐 유지보수냐를 보았을때, 멀티스레드 환경이 필요한 것으로 보인다..
+
+
+<details>
+<summary>기존 호출</summary>
+    
+```ruby
+```
+</details>
