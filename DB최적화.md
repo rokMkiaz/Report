@@ -2668,3 +2668,5 @@ void CDBManager::ON_DCM_SAVE_PC_2(int iClient, WORD wExtraHeader, BYTE* pPacket)
 sp_recompile 호출: 특정 개체에 대해 sp_recompile 프로시저가 수동으로 실행되면, 해당 개체를 참조하는 모든 실행 계획이 제거됩니다.
 4. SQL Server 서비스 재시작: SQL Server 서비스가 재시작되면, 메모리에 있는 모든 캐시된 정보(실행 계획, 데이터 페이지 등)가 비워지고 처음부터 다시 시작됩니다.
 5. 자동 파라미터화 (Simple Parameterization): SQL Server의 자동 파라미터화 기능은 특정 패턴의 ad-hoc 쿼리를 매개변수화하여 캐시합니다. 하지만 쿼리 패턴이 복잡하거나, 설정이 변경되면 계획 재사용이 실패하고 ExecutionCount가 초기화될 수 있습니다.
+
+라이브DB를 모니터링하며 해당 사항들이 언제 과하게 일어나는지 파악할 필요가 있으며, 주기적인 메모리 정리라는 선택지는 리스크에 대한 임시적 해결방안밖에 안된다.
