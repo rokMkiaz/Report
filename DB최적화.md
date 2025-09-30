@@ -2649,7 +2649,7 @@ void CDBManager::ON_DCM_SAVE_PC_2(int iClient, WORD wExtraHeader, BYTE* pPacket)
 <img width="904" height="1245" alt="image" src="https://github.com/user-attachments/assets/81bef5f7-b6a8-4d87-b134-d6ef3aa551ee" />
 
 해당 코드로 변경하며 분명히 성능상 30%는 증가한 것으로 측정이 된다. 하지만, 코드의 중복되는 부분들이 늘어났으며, 성능이냐 유지보수냐를 보았을때 멀티스레드 환경이면 해결될 문제인 것으로 보인다.
-메세지 처리부분을 보니 IOCP에서 받는건 멀티스레드지만, 메세지 처리 부분이 단일 스레드인것으로 확인된다.
+메세지 처리부분을 보니 IOCP에서 받는건 멀티스레드지만, 메세지 처리 부분이 단일 스레드인것으로 확인된다. 그러나 동일 로컬에서는 성능상 차이가 두드러지게 보이지 않는것을 확인되었다. IOCP스레드수를 4->8개로 늘리니 기존과 심한차이가 나지 않았다. 
 
 <details>
 <summary></summary>
