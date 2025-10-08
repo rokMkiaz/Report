@@ -2649,7 +2649,7 @@ void CDBManager::ON_DCM_SAVE_PC_2(int iClient, WORD wExtraHeader, BYTE* pPacket)
 <img width="904" height="1245" alt="image" src="https://github.com/user-attachments/assets/81bef5f7-b6a8-4d87-b134-d6ef3aa551ee" />
 
 해당 코드로 변경하며 분명히 성능상 30%는 증가한 것으로 측정이 된다. 하지만, 코드의 중복되는 부분들이 늘어났으며, 성능이냐 유지보수냐를 보았을때 멀티스레드 환경이면 해결될 문제인 것으로 보인다.
-메세지 처리부분을 보니 IOCP에서 받는건 멀티스레드지만, 메세지 처리 부분이 단일 스레드인것으로 확인된다. 그러나 동일 로컬에서는 성능상 차이가 두드러지게 보이지 않는것을 확인되었다. IOCP스레드수를 4->8개로 늘리니 기존과 심한차이가 나지 않았다. 
+메세지 처리부분을 보니 IOCP에서 받는건 멀티스레드지만, 메세지 처리 부분이 단일 스레드인것으로 확인된다. 그러나 동일 로컬에서는 성능상 차이가 두드러지게 보이지 않는것을 확인되었다. IOCP스레드수를 4->8개로 늘리니 기존과 심한차이가 나지 않았다.
 
 <details>
 <summary></summary>
@@ -2675,3 +2675,5 @@ sp_recompile 호출: 특정 개체에 대해 sp_recompile 프로시저가 수동
 강제 실행 계획(Plan Forcing): OPTION (RECOMPILE), OPTIMIZE FOR, 또는 쿼리 저장소(Query Store) 기능을 사용하여 특정 프로시저에 대한 최적의 실행 계획이 항상 사용되도록 강제하는 것이 근본적인 해결책이 될 수 있습니다.
 파라미터 스니핑(Parameter Sniffing): 프로시저의 입력 매개변수에 따라 최적화된 계획이 달라지는 경우, WITH RECOMPILE을 사용하거나 파라미터 스니핑 방지 기법을 적용해야 합니다.
 지속적인 모니터링: **확장 이벤트(Extended Events)**나 성능 카운터를 통해 **실제로 실행 계획이 제거(Memory Pressure)되거나 재컴파일(Recompilation)**되는 시점을 정확하게 파악하여 원인을 특정해야 합니다.
+
+결론은 인덱스를 사용하는데 있어 DB에서 캐싱하는 메모리에 대해 이해해야하고 물리적으로 쌓고 정말 필요할때만 비클러스트로 쌓아야할 것 같다.
