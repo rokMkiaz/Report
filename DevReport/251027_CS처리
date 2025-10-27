@@ -1,0 +1,14 @@
+[아이템_거래_유형] 비트플래그에 4가 포함되지 않은 항목만 삭제 쿼리
+
+SELECT A.*, B.[아이템_거래_유형]
+FROM [TEST].[dbo].[유저_삭제아이템리스트_찐] AS A
+JOIN [TEST].[dbo].[1003bM_ItemInfo] AS B
+  ON A.itemindex = B.[인덱스]
+WHERE (B.[아이템_거래_유형] & 4) = 0;
+
+
+DELETE A
+FROM [TEST].[dbo].[유저_삭제아이템리스트_찐] AS A
+JOIN [TEST].[dbo].[1003bM_ItemInfo] AS B
+  ON A.itemindex = B.[인덱스]
+WHERE (B.[아이템_거래_유형] & 4) = 0;
