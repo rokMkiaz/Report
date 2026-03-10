@@ -896,5 +896,2649 @@ void CFindPath::SmoothPath_v2() {
 
 #### 3.5 Math 로직 최적화
 기존의 공격 로직의 분할이 필요해 보여 작업을 하였다.
+<details>
+<summary>기존 코드</summary>
+	
 ```ruby
+
+/// <summary>
+/// 조선협객전2 공격할 때
+/// </summary>
+/// <param name="pUnit">공격하는 유닛</param>
+/// <param name="pTarget">맞는 유닛</param>
+void CMath::AttackTarget_Chosun2M(CUnit* pUnit, CUnit* pTarget)
+{
+
+#pragma region 평타 계산식		24.06.14 이제연
+	// 24.07.19 이제연 수정
+	// 
+	// 순서
+	// 
+	// 적중률 => 1차 대미지 => 2차 대미지 => 3차 대미지 => 최종 대미지 => 추가 대미지 => 경직 및 경직 회피
+	// 
+	// 적중률 :	기본 70 + 공격자 적중 수치 - 방어자 회피 수치 >= 랜덤값 (1~100) = 적중 
+	//			기본 70 + 공격자 적중 수치 - 방어자 회피 수치 <  랜덤값 (1~100) = 회피
+	// 
+	// 1차 대미지 : (공격력 * ( 1 - (방어력 - 방어력무시) / ( 방어력 + 방어상수 500))) * 랜덤값 0.95 ~ 1.05
+	//				(방어력 - 방어력무시) 값이 0이 나오면 공격력 * 랜덤값
+	//				
+	// 2차 대미지 :	대미지 증가 수치 = 공격자 대미지 증가(근,원,도) - 방어자 대미지 증가 무시(근,원,도)
+	//				대미지 증가 수치가 >  0 이면 기본대미지 * (1 + 대미지 증가 수치 * 0.01 )
+	//				대미지 증가 수치가 <= 0 이면 기본 대미지
+	// 
+	// 3차 대미지 :	일격필살 발동 = 일격필살 확률 >= 랜덤값 (1 ~ 100)
+	//				일격 필살 대미지 증가 수치 = 공격자 일격 필살 대미지 증가 - 방어자 일격 필살 대미지 증가 무시
+	// 
+	//				일격 필살 미 발동시 대미지 = 2차 대미지
+	// 
+	//				일격 필살 대미지 증가 수치 > 0 이면 (2차 대미지) * (1.25 + (대미지 증가수치 * 0.001) + (랜덤값 0.01~ 0.05))
+	//				일격 필살 대미지 증가 수치 <= 0 이면 2차 대미지
+	//																
+	//			
+	// 최종 대미지 : 3차 대미지 + (pve, pvp 공격력 - pve, pvp 방어력)
+	//							 수치가 음수여도 그대로 적용
+	// 
+	// 추가 대미지 : 공격자 추가 대미지 증가 - 방어자 추가 대미지 증가 무시 (근, 원, 도)
+	//				추가 대미지 수치가 > 0 이면 최종 대미지 * (1 + 추가 대미지 증가 *0.01)
+	//				추가 대미지 수치가 <= 이면 최종 대미지
+	// 
+	// 경직 및 경직회피 : 50 + 공격자 경직 적중 수치 - 방어자 경직 회피 수치 >= 랜덤값 ( 1~100) 이면 경직 발동
+	//																	< 랜덤값 (1~100)이면 회피
+#pragma endregion
+
+	if (pUnit == NULL)
+	{
+		return;
+	}
+
+	if (pTarget == NULL)
+	{
+		CUnitPC* pcheckPC = dynamic_cast<CUnitPC*>(pUnit); //더미가 상대가 죽은 것을 받지 못하였을 때 버그로 인해 생성
+		if (pcheckPC)
+		{
+			SP_Attack sendCheckmsg;
+			sendCheckmsg._result = ENUM_ALL_ERROR_ATTACK_NOT_TARGET;
+			pcheckPC->Write((BYTE*)&sendCheckmsg, sizeof(SP_Attack), 0);
+		}
+		return;
+	}
+
+	if (pUnit->GetCurrentMap() == NULL || pTarget->GetCurrentMap() == NULL || pUnit->GetCurrentMap() != pTarget->GetCurrentMap())
+	{
+		CUnitPC* pcheckPC = dynamic_cast<CUnitPC*>(pUnit); //더미가 상대가 죽은 것을 받지 못하였을 때 버그로 인해 생성
+		if (pcheckPC)
+		{
+			SP_Attack sendCheckmsg;
+			sendCheckmsg._result = ENUM_ALL_ERROR_ATTACK_NOT_TARGET;
+			pcheckPC->Write((BYTE*)&sendCheckmsg, sizeof(SP_Attack), 0);
+		}
+		return;
+	}
+
+	CGameMap* pCurrentMap = pUnit->GetCurrentMap();
+
+	INT32 i32Range = 1;
+	BOOL bRange = FALSE;
+
+	SP_Attack sendmsg;
+	sendmsg.dwFieldUnique = pUnit->GetFieldUnique();
+	sendmsg.dwFieldUnique_Target = pTarget->GetFieldUnique();
+	sendmsg._position = pTarget->GetPosition();
+
+	SP_Attack_Extra extramsg;
+	extramsg.dwFieldUnique = pUnit->GetFieldUnique();
+	extramsg.dwFieldUnique_Target = pTarget->GetFieldUnique();
+	extramsg._position = pTarget->GetPosition();
+
+	SP_Attack_Extra passiveextramsg;
+	passiveextramsg._result = 4; // 구분용
+	passiveextramsg.dwFieldUnique = pUnit->GetFieldUnique();
+	passiveextramsg.dwFieldUnique_Target = pTarget->GetFieldUnique();
+	passiveextramsg._position = pTarget->GetPosition();
+
+	//sendmsg.iDamage = 0;
+	CUnitPC* pPC = dynamic_cast<CUnitPC*>(pUnit);
+	CUnitNPC* pNPC = dynamic_cast<CUnitNPC*>(pUnit);
+	CUnitClone* pClonePC = dynamic_cast<CUnitClone*>(pUnit);
+	memset(sendmsg._i32AttackType,0,sizeof(INT32) * MAX_COUNT_DAMAGE);
+	memset(extramsg._i32AttackType,0,sizeof(INT32) * MAX_COUNT_DAMAGE);
+	memset(passiveextramsg._i32AttackType,0,sizeof(INT32) * MAX_COUNT_DAMAGE);
+	if (pPC != NULL)
+	{
+		for (int i = 0 ; i < MAX_COUNT_DAMAGE; i++)
+		{
+			if (pPC->GetHideAvatar() != TRUE && pPC->_AvatarList.GetUseAvatarIndex() != 0)
+			{
+				if (pPC->_AvatarList.GetAvatarSkinIndex() != 0)
+				{
+					// 투명 둔갑이면
+					if (pPC->_AvatarList.GetAvatarSkinIndex() == TRANSPARENCY_TRANSFORM_INDEX)
+					{// 기존 자신 캐릭터의 어택 타입을 보내기
+						sendmsg._i32AttackType[i] = pPC->GetJobCode() + (pPC->GetGender() == PC_MAN ? 0 : 100);
+						extramsg._i32AttackType[i] = pPC->GetJobCode() + (pPC->GetGender() == PC_MAN ? 0 : 100);
+						passiveextramsg._i32AttackType[i] = pPC->GetJobCode() + (pPC->GetGender() == PC_MAN ? 0 : 100);
+					}
+					else
+					{
+						auto pAvatarData = g_AvatarManager.FindAvatarData(pPC->_AvatarList.GetAvatarSkinIndex());
+						sendmsg._i32AttackType[i] = pAvatarData->_i32AttackIndex;
+						extramsg._i32AttackType[i] = pAvatarData->_i32AttackIndex;
+						passiveextramsg._i32AttackType[i] = pAvatarData->_i32AttackIndex;
+					}
+				}
+				else
+				{
+					auto pAvatarData = g_AvatarManager.FindAvatarData(pPC->_AvatarList.GetUseAvatarIndex());
+					sendmsg._i32AttackType[i] = pAvatarData->_i32AttackIndex;
+					extramsg._i32AttackType[i] = pAvatarData->_i32AttackIndex;
+					passiveextramsg._i32AttackType[i] = pAvatarData->_i32AttackIndex;
+				}
+
+
+			}
+			else
+			{
+				sendmsg._i32AttackType[i] = pPC->GetJobCode() + (pPC->GetGender() == PC_MAN ? 0 : 100);
+				extramsg._i32AttackType[i] = pPC->GetJobCode() + (pPC->GetGender() == PC_MAN ? 0 : 100);
+				passiveextramsg._i32AttackType[i] = pPC->GetJobCode() + (pPC->GetGender() == PC_MAN ? 0 : 100);
+			}
+			auto num = g_GameManager.getRandomNumber(0, 1);
+			sendmsg._i32AttackType[i] = sendmsg._i32AttackType[i] + (num * RANDOM_NEXT_ATTACK_INDEX);
+			extramsg._i32AttackType[i] = sendmsg._i32AttackType[i] + (num * RANDOM_NEXT_ATTACK_INDEX);
+			passiveextramsg._i32AttackType[i] = sendmsg._i32AttackType[i] + (num * RANDOM_NEXT_ATTACK_INDEX);
+		}
+	}
+	else if (pNPC != NULL)
+	{
+		sendmsg._i32AttackType[0] = pNPC->GetAttackIndex();
+		auto num = g_GameManager.getRandomNumber(0, 1);
+		sendmsg._i32AttackType[0] = sendmsg._i32AttackType[0] + (num * RANDOM_NEXT_ATTACK_INDEX);
+	}
+	else if (pClonePC)
+	{
+		if (pClonePC->GetTransformIndex() != 0)
+		{
+			auto pAvatarData = g_AvatarManager.FindAvatarData(pClonePC->GetTransformIndex());
+			sendmsg._i32AttackType[0] = pAvatarData->_i32AttackIndex;
+		}
+		else
+		{
+			sendmsg._i32AttackType[0] = pClonePC->GetJobCode() + (pClonePC->GetGender() == PC_MAN ? 0 : 100);
+		}
+		auto num = g_GameManager.getRandomNumber(0, 1);
+		sendmsg._i32AttackType[0] = sendmsg._i32AttackType[0] + (num * RANDOM_NEXT_ATTACK_INDEX);
+	}
+	memset(sendmsg._ui32Damage, 0x00, sizeof(UINT32) * MAX_COUNT_DAMAGE);
+	memset(sendmsg._ui32ExtraDamage, 0x00, sizeof(UINT32) * MAX_COUNT_DAMAGE);
+	memset(extramsg._ui32Damage, 0x00, sizeof(UINT32) * MAX_COUNT_DAMAGE);
+	memset(passiveextramsg._ui32Damage, 0x00, sizeof(UINT32) * MAX_COUNT_DAMAGE);
+	//memset(extramsg._ui32ExtraDamage, 0x00, sizeof(UINT32) * MAX_COUNT_DAMAGE);
+
+	CBuff* newBuff = NULL;
+	INT32 i32ItemOptionIndex = 0;
+	INT32 i32DurationTime = 0;
+
+	// ============================= 적중률 계산 ================================
+	BOOL bMiss = MissCheck(pUnit, pTarget);
+	INT32 i32Random = 0;
+	// 때리는 사람이 유저 일때
+	if (pUnit->GetUnitTYPE() == eUnitType::PC)
+	{
+		// 때리는 애 
+		CUnitPC* pPC = dynamic_cast<CUnitPC*>(pUnit);
+
+		if (pPC == NULL)
+		{
+			return;
+		}
+		INT32 i32AttackCount = pPC->GetAttackCount();
+		INT32 i32SuccessAttackCount = 0;
+		INT32 i32SuccessSpecialCount = 0;
+		INT32 i32SuccessSpecialExtraCount = 0; // 얘는 사실상 안씀
+		INT32 i32HpPersent = 100;
+		i32Range = AttackRange(pPC->GetJobCode());
+		INT32 i32Avatar = pPC->_AvatarList.GetUseAvatarIndex();
+		if (i32Avatar != 0)
+		{
+			auto pAvatar = g_AvatarManager.FindAvatarData(i32Avatar);
+			if (pAvatar)
+			{
+				i32Range = pAvatar->_i32AttackRange;
+			}
+		}
+
+		// 평타 사거리 증가량 확인
+		i32Range += pPC->GetRangeAttackAdd();
+
+		// 맞는 애
+		//CUnitPC* pTargetPC = dynamic_cast<CUnitPC*>(pTarget);
+
+		if (pTarget == NULL)
+		{
+			sendmsg._result = ENUM_ALL_ERROR_ATTACK_NOT_TARGET;
+			if (i32SuccessAttackCount != 0)
+			{
+				sendmsg._result = SUCCESS;
+			}
+			pPC->Write((BYTE*)&sendmsg, sizeof(SP_Attack));
+			return;
+		}
+
+		if (pTarget->GetAlive() == FALSE)
+		{
+			sendmsg._result = ENUM_ALL_ERROR_ATTACK_NOT_TARGET;
+			if (i32SuccessAttackCount != 0)
+			{
+				sendmsg._result = SUCCESS;
+			}
+			pPC->Write((BYTE*)&sendmsg, sizeof(SP_Attack));
+			return;
+		}
+
+
+		for (int i = 0; i < i32AttackCount; i++)
+		{
+			BOOL bExtraPassive = CheckPassiveExtra(pUnit);
+			// ======================== PVP ================================
+			if (pTarget->GetUnitTYPE() == eUnitType::PC)
+			{
+				CUnitPC* pTargetPC = dynamic_cast<CUnitPC*>(pTarget);
+				if (pTargetPC == NULL)
+				{
+					return;
+				}
+
+				if (pPC->GetAccountType() != ACCTYPE_DUMMY)
+				{
+					//더미 계정 거리계산 안함
+					bRange = g_MapManager.IsRange(i32Range, pUnit->m_X, pUnit->m_Y, pTarget->m_X, pTarget->m_Y);
+					if (bRange == FALSE)
+					{
+						sendmsg._result = ENUM_ALL_ERROR_ATTACK_NOT_RANGE;
+						pPC->Write((BYTE*)&sendmsg, sizeof(SP_Attack), 0);
+						return;
+					}
+				}
+			
+				// 회피 했다.
+				if (bMiss == TRUE)
+				{
+					//sendmsg._result = 2;
+					sendmsg._result = 0;
+					sendmsg._ui32Damage[i] = 0;
+					sendmsg._ui32ExtraDamage[i] = 0;
+					INT32 i32AttackAnimationIdx = pUnit->GetAttAnimationIndex(FALSE);
+					//sendmsg._result |= (pTarget->GetHpPercent() << 4);
+					//sendmsg._result |= i32AttackAnimationIdx << 16;
+					i32HpPersent = pTarget->GetHpPercent();
+					//pCurrentMap->m_BlockManager.Attack_to_BroadCast(pUnit, pTarget, &sendmsg);
+					sendmsg.i32Critical = FALSE;
+					sendmsg.i32ExtraCritical = FALSE;
+					//pPC->BattleActionEvent(QUEST_PURPOSE_MISS);
+					//pTargetPC->BattleActionEvent(QUEST_PURPOSE_GET_MISS);
+					i32SuccessAttackCount++;
+					bMiss = MissCheck(pUnit, pTarget);
+					continue;
+				}
+
+				//혼불 사용 여부 판단 하여 차감 진행
+				pPC->_SoulfireList.UserSoulFire(pPC, ENUM_SOULFIRE_TYPE::NOMAL_ATTACK);
+				pTargetPC->_SoulfireList.UserSoulFire(pTargetPC, ENUM_SOULFIRE_TYPE::NOMAL_DEFENSE);
+
+				// 추가타 확인해서 혼불 차감
+				if (bExtraPassive)
+				{
+					pPC->_SoulfireList.UserSoulFire(pPC, ENUM_SOULFIRE_TYPE::NOMAL_ATTACK);
+					pTargetPC->_SoulfireList.UserSoulFire(pTargetPC, ENUM_SOULFIRE_TYPE::NOMAL_DEFENSE);
+				}
+
+				/* 여기서 부터 검사할건 모두 했다. */
+				// 누가 때린건지 기록
+				pTargetPC->AddHurtUnit(pUnit->GetFieldUnique(), pUnit->GetUnitTYPE());
+
+				sendmsg._result = 0;
+				extramsg._result = 0;
+				BOOL bCritical = FALSE;
+				BOOL bExtraCritical = FALSE;
+				INT32 i32AttackAnimationIdx = pPC->GetAttAnimationIndex(FALSE);
+
+				// ======================== 대미지 계산 ================================
+				INT32 i32AllDamage = AttackTarget_Damage_PCPC(pUnit,pTarget, bCritical);
+				INT32 i32SpecialDamage = GetAttackExtraDamage_Chosun2M(pPC, pTarget, i32AllDamage, i32SuccessSpecialCount);
+				INT32 i32AllExtraDamage = 0;
+				INT32 i32SpecialExtraDamage = 0;
+				if (bExtraPassive)
+				{
+					i32AllExtraDamage = AttackTarget_Damage_PCPC(pUnit, pTarget, bExtraCritical);
+					i32SpecialExtraDamage = GetAttackExtraDamage_Chosun2M(pPC, pTarget, i32AllExtraDamage, i32SuccessSpecialExtraCount);
+				}
+	 
+				INT32 i32TotalDamage = i32AllDamage + i32SpecialDamage + i32AllExtraDamage + i32SpecialExtraDamage;
+				if (i32TotalDamage <= 0)
+				{
+					i32TotalDamage = 1;
+					//sendmsg.iDamage = i32AllDamage;
+				}
+				pTargetPC->AddHP(-i32TotalDamage);
+
+				if (pUnit->GetUnitTYPE() == eUnitType::PC)
+				{
+					CUnitPC* _pUser = dynamic_cast<CUnitPC*>(pUnit);
+					if (_pUser != NULL)
+					{
+						_pUser->CheckMaxDamageLog(pTarget, i32TotalDamage);
+					}
+				}
+
+				sendmsg._ui32Damage[i] = i32AllDamage;
+				sendmsg._ui32ExtraDamage[i] = i32AllExtraDamage;
+				sendmsg.i32Critical |= bCritical << i;
+				sendmsg.i32ExtraCritical |= bExtraCritical << i;
+
+				extramsg._ui32Damage[i] = i32SpecialDamage;
+				passiveextramsg._ui32Damage[i] = i32SpecialExtraDamage;
+				extramsg.i32Critical |= bCritical << i;
+				passiveextramsg.i32Critical |= bExtraCritical << i;
+				//sendmsg.iDamage = i32AllDamage;
+				//sendmsg.i32Critical = bCritical;
+
+				// 만약 여기서 타겟이 염화결계 버프를 가지고있으면 일정확률로 화상버프를 나한테 넣어야한다..
+				// 반사로 줄 버프 가져오는데 없으면 반사스킬이 적용되어있지않다.
+				// 의도된 사항 : 평타만 반사되도록
+				stBuffData* reflectBuff = pTargetPC->GetReflectSkillData();
+				if (reflectBuff)
+				{
+					g_BuffManager.AddBuff(reflectBuff, pTargetPC, pPC);	// 반사버프
+				}
+
+				//강제 셋팅
+				if (pTargetPC->GetCurrentHP() > 0 && pTargetPC->GetStiffnessTime() <= 0)
+				{
+					// ======================== 경직 계산 ================================
+					if (StiffnssCheck(pUnit,pTarget))
+					{
+						pTargetPC->SetStiffnessTime();
+						SP_STIFFNESS sendstiffness;
+						sendstiffness._dwTargetFieldUnique = pTargetPC->GetFieldUnique();
+						sendstiffness._dwFieldUnique = pUnit->GetFieldUnique();
+						if(pTargetPC->GetCurrentMap())
+							pTargetPC->GetCurrentMap()->m_BlockManager.BroadCast(pTarget, (BYTE*)&sendstiffness, sizeof(SP_STIFFNESS));
+					}
+				}
+
+				//데미지 핵 체크 - 로직 수정 필요
+				//g_GameManager.WriteAttackException(pPC, sendmsg.iDamage, 0);
+			
+				// PK 쿨타임 적용
+				if (pPC->GetPKCoolTime() <= 0)
+				{
+					switch (pPC->GetMapType())
+					{
+					case ENUM_PVP_MAP_TYPE::ENUM_PVP_MAP_TYPE_SAFE:
+					{
+						pPC->SetPKCoolTime(SAFE_PVP_MAP_COOL);
+					}
+					break;
+					case ENUM_PVP_MAP_TYPE::ENUM_PVP_MAP_TYPE_NORMAL:
+					{
+						pPC->SetPKCoolTime(NORMAL_PVP_MAP_COOL);
+					}
+					break;
+					case ENUM_PVP_MAP_TYPE::ENUM_PVP_MAP_TYPE_DANGER:
+					{
+						// 상대 PK꺼져있으면 PK켜주자
+						if (pTargetPC->CheckPKMode() == FALSE)
+						{
+							if (pTargetPC->OptionAttackReturn() == TRUE)
+							{//반격 켜두었을 때만 PK 진행
+								pTargetPC->SetPKMode(TRUE);
+								SP_PKINFO sendpkInfo;
+								sendpkInfo.dwField = pTargetPC->GetFieldUnique();
+								sendpkInfo.dwteamunique = pTargetPC->GetTeamunique();
+								sendpkInfo._i32PKGrade = (INT32)pTargetPC->GetPKGrade();
+								sendpkInfo.bPkmode = pTargetPC->CheckPKMode();
+								if(pTargetPC->GetCurrentMap())
+									pTargetPC->GetCurrentMap()->m_BlockManager.BroadCast(pTargetPC, (BYTE*)&sendpkInfo, sizeof(SP_PKINFO), 0);
+								pTargetPC->SetPKCoolTime(DANGER_PVP_MAP_COOL);
+							}
+						}
+						else
+						{
+							pTargetPC->SetPKCoolTime(DANGER_PVP_MAP_COOL);
+						}
+						pPC->SetPKCoolTime(DANGER_PVP_MAP_COOL);
+					}
+					break;
+					case ENUM_PVP_MAP_TYPE::ENUM_PVP_MAP_TYPE_DISPUTE:
+					{
+						pPC->SetPKCoolTime(DISPUTE_PVP_MAP_COOL);
+					}
+					break;
+					default:
+					{
+						pPC->SetPKCoolTime(0);
+					}
+					break;
+					}
+				}
+				bMiss = MissCheck(pUnit, pTarget);
+				i32SuccessAttackCount++;
+			}
+			// ======================== PVE ================================
+			else if (pTarget->GetUnitTYPE() == eUnitType::NPC)
+			{
+				CUnitNPC* pTargetNPC = dynamic_cast<CUnitNPC*>(pTarget);
+				if (pTargetNPC == NULL || pTargetNPC->GetNPC_CSVData() == NULL)
+				{
+					CUnitPC* pcheckPC = dynamic_cast<CUnitPC*>(pUnit); //더미가 상대가 죽은 것을 받지 못하였을 때 버그로 인해 생성
+					if (pcheckPC)
+					{
+						SP_Attack sendCheckmsg;
+						sendCheckmsg._result = ENUM_ALL_ERROR_ATTACK_NOT_TARGET;
+						pcheckPC->Write((BYTE*)&sendCheckmsg, sizeof(SP_Attack), 0);
+					}
+					return;
+				}
+
+				if (pPC->GetAccountType() != ACCTYPE_DUMMY) { //더미 데이터 거리 해제
+					bRange = g_MapManager.IsRange(i32Range + pTargetNPC->GetNPC_CSVData()->TileSize + pTargetNPC->GetNPC_CSVData()->_i32HitSize, pUnit->m_X, pUnit->m_Y, pTarget->m_X, pTarget->m_Y);
+
+					if (bRange == FALSE)
+					{
+						sendmsg._result = ENUM_ALL_ERROR_ATTACK_NOT_RANGE;
+						sendmsg._result |= (pTargetNPC->GetHpPercent() << 4);
+						pPC->Write((BYTE*)&sendmsg, sizeof(SP_Attack), 0);
+						return;
+					}
+				}
+
+				// 회피 했다.
+				if (bMiss == TRUE)
+				{
+					//sendmsg._result = 2;
+					sendmsg._result = 0;
+					sendmsg._ui32Damage[i] = 0;
+					sendmsg._ui32ExtraDamage[i] = 0;
+					INT32 i32AttackAnimationIdx = pUnit->GetAttAnimationIndex(FALSE);
+					//sendmsg._result |= (pTarget->GetHpPercent() << 4);
+					i32HpPersent = pTargetNPC->GetHpPercent();
+					//sendmsg._result |= i32AttackAnimationIdx << 16;
+					//pCurrentMap->m_BlockManager.Attack_to_BroadCast(pUnit, pTarget, &sendmsg);
+					sendmsg.i32Critical = FALSE;
+					sendmsg.i32ExtraCritical = FALSE;
+					//pPC->BattleActionEvent(QUEST_PURPOSE_MISS);
+					//pTargetPC->BattleActionEvent(QUEST_PURPOSE_GET_MISS);
+					if (pTargetNPC->GetNPC_CSVData()->Type != VILLAGE_NPC)
+					{
+						// 미스도 어그로 끌개 수정
+						if (pTargetNPC->GetDamage_Unit()->dwUnitUnique <= 0)
+						{
+							BOOL bLoopTickChange = FALSE;
+							if (pTargetNPC->GetCurrentStatus() != NPC_CURRENT_STATUS::ATTACK
+								&& pTargetNPC->GetMoveTile() == FALSE)
+							{
+								bLoopTickChange = TRUE;
+							}
+							pTargetNPC->SetDamageUnit(pPC->GetPoolArray(), pPC->GetFieldUnique(), pPC->m_X, pPC->m_Y);
+							if (bLoopTickChange)
+							{ //남아 있는 틱 제거
+								INT32 i32Xcha = abs(pTargetNPC->m_X - pPC->m_X);
+								INT32 i32Ycha = abs(pTargetNPC->m_Y - pPC->m_Y);
+								if (pPC->GetJobCode() == JOB_TYPE::JOB_TYPE_SWORD)
+								{
+									pTargetNPC->m_LoopTick = GetTickCount64() + 650;
+								}
+								else
+								{
+									//pTargetNPC->m_LoopTick = GetTickCount64() + ((i32Xcha + i32Ycha) * 27.5);
+									pTargetNPC->m_LoopTick = GetTickCount64() + ((i32Xcha + i32Ycha) * 25) + 500;
+								}
+							}
+						}
+						/*추가 -> 유저 주변 합공몬스터 체크 후 어그로 끌어주기*/
+						if(pPC->GetCurrentMap())
+							pPC->GetCurrentMap()->m_BlockManager.SetJoinAttackDamageUnit(pPC, MAX_JOIN_ATTACK_SCOPE);
+					}
+					i32SuccessAttackCount++;
+					bMiss = MissCheck(pUnit, pTarget);
+					continue;
+				}
+
+				//혼불 사용 여부 판단 하여 차감 진행
+				pPC->_SoulfireList.UserSoulFire(pPC, ENUM_SOULFIRE_TYPE::NOMAL_ATTACK);
+
+				// 패시브 추가타 있으면 혼불 차감
+				if (bExtraPassive)
+				{
+					pPC->_SoulfireList.UserSoulFire(pPC, ENUM_SOULFIRE_TYPE::NOMAL_ATTACK);
+				}
+
+				pPC->SetLastTargetNpcField(pTargetNPC->GetFieldUnique()); // 마지막 공격 대상 필드유니크 세팅
+				pPC->ResetConExpTick();
+
+				if (pTargetNPC->GetNPC_CSVData()->Type == VILLAGE_NPC)
+				{
+					sendmsg._result = ENUM_ALL_ERROR_ATTACK_TOWN_NPC;
+					pPC->Write((BYTE*)&sendmsg, sizeof(SP_Attack), 0);
+					//printf("SP_ATTACK TARGET TYPE 0\n");
+					return;
+				}
+				else
+				{
+					// 어그로 끌어주고
+					if (pTargetNPC->GetDamage_Unit()->dwUnitUnique <= 0)
+					{
+						BOOL bLoopTickChange = FALSE;
+						if (pTargetNPC->GetCurrentStatus() != NPC_CURRENT_STATUS::ATTACK
+							&& pTargetNPC->GetMoveTile() == FALSE)
+						{
+							bLoopTickChange = TRUE;
+						}
+						pTargetNPC->SetDamageUnit(pPC->GetPoolArray(), pPC->GetFieldUnique(), pPC->m_X, pPC->m_Y);
+						if (bLoopTickChange)
+						{ //남아 있는 틱 제거
+							INT32 i32Xcha = abs(pTargetNPC->m_X - pPC->m_X);
+							INT32 i32Ycha = abs(pTargetNPC->m_Y - pPC->m_Y);
+							if (pPC->GetJobCode() == JOB_TYPE::JOB_TYPE_SWORD)
+							{
+								pTargetNPC->m_LoopTick = GetTickCount64() + 650;
+							}
+							else
+							{
+								//pTargetNPC->m_LoopTick = GetTickCount64() + ((i32Xcha + i32Ycha) * 27.5);
+								pTargetNPC->m_LoopTick = GetTickCount64() + ((i32Xcha + i32Ycha) * 25) + 500;
+							}
+						}
+					}
+
+
+					/*추가 -> 유저 주변 합공몬스터 체크 후 어그로 끌어주기*/
+					if(pPC->GetCurrentMap())
+						pPC->GetCurrentMap()->m_BlockManager.SetJoinAttackDamageUnit(pPC, MAX_JOIN_ATTACK_SCOPE);
+
+					sendmsg._result = 0;
+					extramsg._result = 0;
+					BOOL bCritical = FALSE;
+					BOOL bExtraCritical = FALSE;
+					INT32 i32AllDamage = AttackTarget_Damage_PCNPC(pUnit,pTarget,bCritical);
+					INT32 i32SpecialDamage = GetAttackExtraDamage_Chosun2M(pPC, pTarget, i32AllDamage, i32SuccessSpecialCount);
+					INT32 i32AllExtraDamage = 0;
+					INT32 i32SpecialExtraDamage = 0;
+
+					if (bExtraPassive)
+					{
+						i32AllExtraDamage = AttackTarget_Damage_PCNPC(pUnit, pTarget, bExtraCritical);
+						i32SpecialExtraDamage = GetAttackExtraDamage_Chosun2M(pPC, pTarget, i32AllDamage, i32SuccessSpecialCount);
+					}
+
+					INT32 i32TotalDamage = i32AllDamage + i32SpecialDamage + i32AllExtraDamage + i32SpecialExtraDamage;
+					//INT32 i32AttackAnimationIdx = pPC->GetAttAnimationIndex(FALSE);
+					INT32 i32AttackAnimationIdx = 0;
+					int iExp = pTargetNPC->GetNpcAttackExp(i32TotalDamage); //
+
+					//int iTendency = pTargetNPC->GetNPCAttackTendency(iDamage);
+
+					int iMyLevel = pPC->GetLevel(); // 내 레벨
+
+					int iLevel = iMyLevel - pTargetNPC->GetLevel();// 레벨 차이
+
+					CParty* pParty = pPC->GetParty();
+
+					// _i32LimitLevel이 1이면 레벨제한x
+					if (pTargetNPC->GetNPC_CSVData()->_i32LimitLevel == 0 && iLevel > 0)	// 케릭 레벨이 몬스터 레벨보다 높으면  
+					{
+						if (iLevel < MAX_XP_LEVEL_GAP)	// 1 ~ 199 렙차 많이 날수록 경험치 깎음, 케릭터가 200이상 높으면 경험치 못먹음 
+						{
+							iExp -= iExp * iLevel * 0.005;
+							//
+							//if (pParty)
+							//{
+							//	int iNeerCnt = pParty->GetScopeUserCount(pPC);
+							//	if (iNeerCnt >= 1)
+							//	{
+							//		pParty->AddExp(iExp, pTargetNPC->GetFieldUnique(), pPC,  pParty->GetScopeLowerLevel(pPC), iNeerCnt);
+							//	}
+							//	else
+							//		pPC->AddExp(iExp, pTargetNPC->GetFieldUnique()); // 나혼자 경험치 먹고 
+							//}
+							//else
+							//{
+							pPC->AddExp(iExp, pTargetNPC->GetFieldUnique()); // 나혼자 경험치 먹고 
+							//}
+				
+						}
+					}
+					else // 케릭 레벨이 몬스터 레벨보다 낮으면  
+					{
+						//if (pParty)
+						//{
+						//	int iNeerCnt = pParty->GetScopeUserCount(pPC);
+						//	if (iNeerCnt >= 1)
+						//	{
+						//		pParty->AddExp(iExp, pTargetNPC->GetFieldUnique(), pPC, pParty->GetScopeLowerLevel(pPC), iNeerCnt);
+						//	}
+						//	else
+						//		pPC->AddExp(iExp, pTargetNPC->GetFieldUnique()); // 나혼자 경험치 먹고 
+						//}
+						//else
+							pPC->AddExp(iExp, pTargetNPC->GetFieldUnique());
+					}
+
+					pTargetNPC->AddHP(-i32TotalDamage);
+
+					// 공성전 몬스터 쳤을때 방송
+					if (i32AllDamage > 0 && pTarget->GetUnitTYPE() == eUnitType::NPC && g_ChosunCastleManager.CheckCastleMap(pPC->GetMapIndex()) == TRUE)
+					{
+						auto pMap = pTargetNPC->GetCurrentMap();
+						if (pMap != NULL)
+						{
+							if(pMap->m_wMapIndex == CASTLE_MAPINDEX)
+								g_ChosunCastleManager.SnedCastleNpcHpList(pTargetNPC, pPC);			
+							else if (pMap->m_wMapIndex == WORLD_CASTLE_MAPINDEX)
+							{
+								g_ChosunCastleManager.SnedWorldCastleNpcHpList(pTargetNPC, pPC);
+								g_ChosunCastleManager.CheckWorldCastleHighHpTowerHp();
+							}
+						}
+					}
+
+					if (pUnit->GetUnitTYPE() == eUnitType::PC)
+					{
+						CUnitPC* _pUser = dynamic_cast<CUnitPC*>(pUnit);
+						if (_pUser != NULL)
+						{
+							_pUser->CheckMaxDamageLog(pTarget, i32TotalDamage);
+						}
+					}
+
+					//g_GameManager.WriteAttackException(pPC, sendmsg.iDamage, pTargetNPC->GetIndex());
+
+					sendmsg._ui32Damage[i] = i32AllDamage;
+					sendmsg._ui32ExtraDamage[i] = i32AllExtraDamage;
+					extramsg._ui32Damage[i] = i32SpecialDamage;
+					passiveextramsg._ui32Damage[i] = i32SpecialExtraDamage;
+
+					sendmsg.i32Critical |= bCritical << i;
+					sendmsg.i32ExtraCritical |= bExtraCritical << i;
+					extramsg.i32Critical |= bCritical << i;
+					passiveextramsg.i32Critical |= bExtraCritical << i;
+					//sendmsg.iDamage = i32AllDamage;
+					//sendmsg.i32Critical = bCritical;
+					//sendmsg._result |= (pTargetNPC->GetHpPercent() << 4);
+					i32HpPersent = pTargetNPC->GetHpPercent();
+					//방송
+					//pCurrentMap->m_BlockManager.Attack_to_BroadCast(pPC, pTargetNPC, &sendmsg);
+
+					//pPC->AddStatExp(pTargetNPC->GetNPC_CSVData()->Index, STAT_TYPE::STAT_TYPE_STR, 1, true, pTargetNPC->GetNPC_CSVData()->_i32Element, pTargetNPC->GetNPC_CSVData()->_i32StatExp);
+					//pPC->ETCEvent(QUEST_PURPOSE_TYPE::QUEST_PURPOSE_GRADE_SELECT, pTargetNPC->GetIndex());
+
+				// 미스아니고, 맞는애가 npc이고, 때리는애가 pc일때 huntEvent에서 체크할 리스트에 insert 해준다. 
+				pTargetNPC->InsertHuntEventList(pPC, i32TotalDamage);
+				if (pTargetNPC->GetCurrentMap() != NULL)
+				{
+					if (pTargetNPC->GetCurrentMap()->GetMapTYPE() == MAP_TYPE_BOSS_RAID)
+					{
+						CGameMap_BossRaidMap* pBossRaidMap = dynamic_cast<CGameMap_BossRaidMap*>(pTargetNPC->GetCurrentMap());
+						if (pBossRaidMap != NULL)
+						{
+							pBossRaidMap->AddDamageList(pPC->GetCharacterUnique(), i32TotalDamage);
+						}
+					}
+					if (pTargetNPC->GetCurrentMap()->GetMapTYPE() == MAP_TYPE_INSTANCE)
+					{
+						CGameMap_Instance* pInstanceMap = dynamic_cast<CGameMap_Instance*>(pTargetNPC->GetCurrentMap());
+						if (pInstanceMap != NULL)
+						{
+							if (pInstanceMap->GetInstanceType() == ENUM_INSTANCETYPE::ENUM_INSTANCETYPE_DPSDUNGEON)
+							{
+								pInstanceMap->AddDpsDungeonDamage(i32TotalDamage);
+							}
+						}
+					}
+				}
+
+				//강제 셋팅
+				if (pTargetNPC->GetCurrentHP() > 0 && pTargetNPC->GetStiffnessTime() <= 0)
+				{
+
+						if (StiffnssCheck(pUnit, pTarget))
+						{
+							pTargetNPC->SetStiffnessTime();
+							SP_STIFFNESS sendstiffness;
+							sendstiffness._dwTargetFieldUnique = pTargetNPC->GetFieldUnique();
+							sendstiffness._dwFieldUnique = pUnit->GetFieldUnique();
+							if(pTargetNPC->GetCurrentMap())
+								pTargetNPC->GetCurrentMap()->m_BlockManager.BroadCast(pTarget, (BYTE*)&sendstiffness, sizeof(SP_STIFFNESS));
+						}
+					}
+					bMiss = MissCheck(pUnit, pTarget);
+					//Kill_Unit(pPC, pTargetNPC, (INT32)ENUM_ATTACK_TYPE::ENUM_ATTACK_TYPE_ATTACK, sendmsg._i32AttackType[i]);
+					i32SuccessAttackCount++;
+
+					if (pTarget->GetAlive() == TRUE)
+					{
+						/*if(bAttackMultiple)
+							pPC->AttackSpecialEffect(pPC, pTarget, sendmsg._ui32Damage[0]);
+						else*/
+						pPC->AttackSpecialEffect(pPC, pTarget, i32AllDamage);
+					}
+					pPC->BattleActionEvent(QUEST_PURPOSE_TYPE::QUEST_PURPOSE_HIT);
+				}
+			} // PVE End
+			if (pTarget->GetCurrentHP() <= 0 && pTarget->GetAlive())
+			{ // HP 0이며 사망했을 경우 loop 종료
+				break;
+			}
+		}
+		i32HpPersent = pTarget->GetHpPercent();
+		//방송
+		sendmsg._result |= (i32HpPersent << 4);
+		//extramsg._result |= (i32HpPersent << 4);
+		sendmsg._i32AttackCount = (i32AttackCount << 4) + (i32SuccessAttackCount);
+		extramsg._i32AttackCount = (i32AttackCount << 4) + (i32SuccessAttackCount);
+
+		INT32 i32CheckAllDamange = 0;
+		for (int j = 0; j< MAX_COUNT_DAMAGE;j++)
+		{
+			i32CheckAllDamange += sendmsg._ui32Damage[j];
+			i32CheckAllDamange += sendmsg._ui32ExtraDamage[j];
+			i32CheckAllDamange += extramsg._ui32Damage[j];
+			i32CheckAllDamange += passiveextramsg._ui32Damage[j];
+		}
+		pCurrentMap->m_BlockManager.Attack_to_BroadCast(pPC, pTarget, &sendmsg);
+		pCurrentMap->m_BlockManager.Attack_to_BroadCast(pPC, pTarget, &extramsg);
+		pCurrentMap->m_BlockManager.Attack_to_BroadCast(pPC, pTarget, &passiveextramsg);
+		UINT32 ui32AttackDetail = i32SuccessAttackCount << 16;
+		ui32AttackDetail += pPC->GetAttackSpeed();
+		if (pTarget->GetUnitTYPE() == eUnitType::PC)
+		{
+			CUnitPC* pTargetPC = dynamic_cast<CUnitPC*>(pTarget);
+			//킬유닛 체크
+			if (pTargetPC)
+			{
+				Kill_Unit(pPC, pTargetPC, pCurrentMap, (INT32)ENUM_ATTACK_TYPE::ENUM_ATTACK_TYPE_ATTACK, i32CheckAllDamange, sendmsg._i32AttackType[0], ui32AttackDetail);
+			}
+		}
+		else if (pTarget->GetUnitTYPE() == eUnitType::NPC)
+		{
+			CUnitNPC* pTargetNPC = dynamic_cast<CUnitNPC*>(pTarget);
+			//킬유닛 체크
+			if (pTargetNPC)
+			{
+				Kill_Unit(pPC, pTargetNPC, pCurrentMap, (INT32)ENUM_ATTACK_TYPE::ENUM_ATTACK_TYPE_ATTACK, i32CheckAllDamange, sendmsg._i32AttackType[0], ui32AttackDetail);
+			}
+		}
+	}
+	// 때리는 사람이 NPC 일때
+	else if (pUnit->GetUnitTYPE() == eUnitType::NPC)
+	{
+		CUnitNPC* pNPC = dynamic_cast<CUnitNPC*>(pUnit);
+		if (pNPC == NULL)
+			return;
+
+		if (pTarget->GetAlive() == FALSE)
+			return;
+
+		CUnitPC* pTargetPC = dynamic_cast<CUnitPC*>(pTarget);
+		sendmsg._i32AttackCount = (1 << 4) + (1);
+
+
+		UINT32 ui32AttackDetail = 1 << 16;
+		ui32AttackDetail += pNPC->GetSendAttackSpeed();
+
+		if (pTarget->GetUnitTYPE() == eUnitType::PC)
+		{
+
+			if (pTargetPC == NULL)
+				return;
+
+			bRange = g_MapManager.IsRange(pNPC->GetNPC_CSVData()->AttRange + pNPC->GetNPC_CSVData()->TileSize + pNPC->GetNPC_CSVData()->_i32HitSize, pUnit->m_X, pUnit->m_Y, pTarget->m_X, pTarget->m_Y);
+			if (bRange == FALSE)
+				return;
+
+			// 회피 했다.
+			if (bMiss == TRUE)
+			{
+				sendmsg._result = 2;
+				INT32 i32AttackAnimationIdx = pUnit->GetAttAnimationIndex(FALSE);
+				sendmsg._result |= (pTarget->GetHpPercent() << 4);
+				sendmsg._result |= i32AttackAnimationIdx << 16;
+				pCurrentMap->m_BlockManager.Attack_to_BroadCast(pUnit, pTarget, &sendmsg);
+				sendmsg.i32Critical = FALSE;
+				sendmsg.i32ExtraCritical = FALSE;
+				sendmsg._i32AttackCount = (1 << 4) + (1);
+				//pPC->BattleActionEvent(QUEST_PURPOSE_MISS);
+				//pTargetPC->BattleActionEvent(QUEST_PURPOSE_GET_MISS);
+				return;
+			}
+
+			pTargetPC->_SoulfireList.UserSoulFire(pTargetPC, ENUM_SOULFIRE_TYPE::NOMAL_DEFENSE);
+			//pTargetPC->SetOfflineModeCheckTick();
+
+			/* 여기서 부터 검사할건 모두 했다. */
+			// 누가 때린건지 기록
+			pTargetPC->AddHurtUnit(pUnit->GetFieldUnique(), pUnit->GetUnitTYPE());
+
+			sendmsg._result = 0;
+			BOOL bCritical = FALSE;
+
+			INT32 i32AttackAnimationIdx = pNPC->GetAttAnimationIndex(FALSE);
+			sendmsg._result |= i32AttackAnimationIdx << 16;
+
+			//INT32 i32Att = pNPC->GetPower(); // 145 
+			
+			INT32 i32Damage = AttackTarget_Damage_NPCPC(pUnit, pTarget, bCritical);
+
+			//if (pTargetPC->GetMapIndex() == 901 && pTargetPC->GetAccountType() == eAccountType::ACCTYPE_GM && i32Damage != 1)
+			//	i32Damage = i32Damage * g_CastleBattleManager._i32AdminDefencePercent * 0.01;
+
+			pTargetPC->AddHP(-i32Damage);
+
+			if (pUnit->GetUnitTYPE() == eUnitType::PC)
+			{
+				CUnitPC* _pUser = dynamic_cast<CUnitPC*>(pUnit);
+				if (_pUser != NULL)
+				{
+					_pUser->CheckMaxDamageLog(pTarget, i32Damage);
+				}
+			}
+
+			sendmsg._ui32Damage[0] = i32Damage;
+			sendmsg.i32Critical = bCritical;
+			//강제 셋팅
+			if (pTargetPC->GetCurrentHP() > 0)
+			{
+				if (StiffnssCheck(pUnit, pTarget))
+				{
+					pTargetPC->SetStiffnessTime();
+					SP_STIFFNESS sendstiffness;
+					sendstiffness._dwTargetFieldUnique = pTargetPC->GetFieldUnique();
+					sendstiffness._dwFieldUnique = pUnit->GetFieldUnique();
+					if(pTargetPC->GetCurrentMap())
+						pTargetPC->GetCurrentMap()->m_BlockManager.BroadCast(pTarget, (BYTE*)&sendstiffness, sizeof(SP_STIFFNESS));
+				}
+			}
+
+			//방송
+			pCurrentMap->m_BlockManager.Attack_to_BroadCast(pNPC, pTargetPC, &sendmsg);
+
+			Kill_Unit(pNPC, pTargetPC, pCurrentMap, (INT32)ENUM_ATTACK_TYPE::ENUM_ATTACK_TYPE_ATTACK, sendmsg._i32AttackType[0], ui32AttackDetail);
+
+			if (pTarget->GetAlive() == TRUE)
+			{
+				pNPC->AttackSpecialEffect(pNPC, pTargetPC, i32Damage);
+			}
+
+			if (pTargetPC->GetConExpTick() > 0 && pTargetPC->GetConExpTick() < 1400 && pTargetPC->GetLastTargetNpcField() == pNPC->GetFieldUnique()) // 0-1.4초 사이면 공격모션중이다 판별
+			{
+				if (pNPC->GetIndex() == FIELD_TRAINING_NPC_INDEX && pTargetPC->GetTitleIndex() >= 3 /*일류고수*/)
+				{
+					return;
+				}
+
+				//pTargetPC->AddStatExp(pNPC->GetNPC_CSVData()->Index, STAT_TYPE::STAT_TYPE_CON, sendmsg.iDamage,
+				//	true, pNPC->GetNPC_CSVData()->_i32Element, pNPC->GetNPC_CSVData()->_i32StatExp);
+			}
+
+			//pTargetPC->BattleActionEvent(QUEST_PURPOSE_TYPE::QUEST_PURPOSE_GET_HIT);
+		}
+		else if (pTarget->GetUnitTYPE() == eUnitType::CLONE)
+		{
+			CUnitClone* pTargetClone = dynamic_cast<CUnitClone*>(pTarget);
+			if (pTargetClone == NULL)
+				return;
+
+			bRange = g_MapManager.IsRange(pNPC->GetNPC_CSVData()->AttRange + pNPC->GetNPC_CSVData()->TileSize + pNPC->GetNPC_CSVData()->_i32HitSize, pUnit->m_X, pUnit->m_Y, pTarget->m_X, pTarget->m_Y);
+			if (bRange == FALSE)
+				return;
+
+			//pTargetClone->SetOfflineModeCheckTick();
+
+			/* 여기서 부터 검사할건 모두 했다. */
+			// 누가 때린건지 기록
+			pTargetPC->AddHurtUnit(pUnit->GetFieldUnique(), pUnit->GetUnitTYPE());
+			sendmsg._result = 0;
+			BOOL bCritical = FALSE;
+
+			INT32 i32AttackAnimationIdx = pNPC->GetAttAnimationIndex(FALSE);
+			sendmsg._result |= i32AttackAnimationIdx << 16;
+
+			//INT32 i32Att = pNPC->GetPower(); // 145 
+
+			INT32 i32Damage = AttackTarget_Damage_NPCCLONE(pUnit, pTarget, bCritical);
+
+			//if (pTargetPC->GetMapIndex() == 901 && pTargetPC->GetAccountType() == eAccountType::ACCTYPE_GM && i32Damage != 1)
+			//	i32Damage = i32Damage * g_CastleBattleManager._i32AdminDefencePercent * 0.01;
+
+			pTargetClone->AddHP(-i32Damage);
+
+
+			if (pUnit->GetUnitTYPE() == eUnitType::PC)
+			{
+				CUnitPC* _pUser = dynamic_cast<CUnitPC*>(pUnit);
+				if (_pUser != NULL)
+				{
+					_pUser->CheckMaxDamageLog(pTarget, i32Damage);
+				}
+			}
+
+			sendmsg._ui32Damage[0] = i32Damage;
+			sendmsg.i32Critical = bCritical;
+			//강제 셋팅
+			if (pTargetClone->GetCurrentHP() > 0)
+			{
+				if (StiffnssCheck(pUnit, pTarget))
+				{
+					pTargetClone->SetStiffnessTime();
+					SP_STIFFNESS sendstiffness;
+					sendstiffness._dwTargetFieldUnique = pTargetClone->GetFieldUnique();
+					sendstiffness._dwFieldUnique = pUnit->GetFieldUnique();
+					if (pTargetClone->GetCurrentMap())
+						pTargetClone->GetCurrentMap()->m_BlockManager.BroadCast(pTarget, (BYTE*)&sendstiffness, sizeof(SP_STIFFNESS));
+				}
+			}
+
+			//방송
+			pCurrentMap->m_BlockManager.Attack_to_BroadCast(pNPC, pTargetClone, &sendmsg);
+
+			Kill_Unit(pNPC, pTargetClone, pCurrentMap, (INT32)ENUM_ATTACK_TYPE::ENUM_ATTACK_TYPE_ATTACK, sendmsg._i32AttackType[0]);
+
+			if (pTarget->GetAlive() == TRUE)
+			{
+				pNPC->AttackSpecialEffect(pNPC, pTargetClone, i32Damage);
+			}
+			//if (pTargetPC->GetConExpTick() > 0 && pTargetPC->GetConExpTick() < 1400 && pTargetPC->GetLastTargetNpcField() == pNPC->GetFieldUnique()) // 0-1.4초 사이면 공격모션중이다 판별
+			//{
+			//	if (pNPC->GetIndex() == FIELD_TRAINING_NPC_INDEX && pTargetPC->GetTitleIndex() >= 3 /*일류고수*/)
+			//	{
+			//		return;
+			//	}
+			//
+			//	//pTargetPC->AddStatExp(pNPC->GetNPC_CSVData()->Index, STAT_TYPE::STAT_TYPE_CON, sendmsg.iDamage,
+			//	//	true, pNPC->GetNPC_CSVData()->_i32Element, pNPC->GetNPC_CSVData()->_i32StatExp);
+			//}
+		}
+		else
+		{
+			return; //NPC가 NPC공격 가능할때 작업하던가 하자. 
+		}
+	}
+	else if (pUnit->GetUnitTYPE() == eUnitType::CLONE)
+	{
+		CUnitClone* pClone = dynamic_cast<CUnitClone*>(pUnit);
+		if (pTarget->GetUnitTYPE() == eUnitType::NPC)
+		{
+			CUnitNPC* pTargetNPC = dynamic_cast<CUnitNPC*>(pTarget);
+			if (pTargetNPC == NULL || pTargetNPC->GetNPC_CSVData() == NULL)
+			{
+				CUnitClone* pcheckPC = dynamic_cast<CUnitClone*>(pUnit); //더미가 상대가 죽은 것을 받지 못하였을 때 버그로 인해 생성
+				if (pcheckPC)
+				{
+					SP_Attack sendCheckmsg;
+					sendCheckmsg._result = ENUM_ALL_ERROR_ATTACK_NOT_TARGET;
+					pcheckPC->Write((BYTE*)&sendCheckmsg, sizeof(SP_Attack), 0);
+				}
+				return;
+			}
+
+			if (pTargetNPC->GetNPC_CSVData()->Type == VILLAGE_NPC)
+			{
+				//sendmsg._result = 1;
+				//pPC->Write((BYTE*)&sendmsg, sizeof(SP_Attack), 0);
+				//printf("SP_ATTACK TARGET TYPE 0\n");
+				return;
+			}
+
+			// TODO : 클론은 공속에 따른 어택카운트 어떻게 할지 기획에 확인 후 작업 다시 해줘야합니다.
+
+			// 회피 했다.
+			if (bMiss == TRUE)
+			{
+				sendmsg._result = 2;
+				INT32 i32AttackAnimationIdx = pUnit->GetAttAnimationIndex(FALSE);
+				sendmsg._result |= (pTarget->GetHpPercent() << 4);
+				sendmsg._result |= i32AttackAnimationIdx << 16;
+				pCurrentMap->m_BlockManager.Attack_to_BroadCast(pUnit, pTarget, &sendmsg);
+
+				//pPC->BattleActionEvent(QUEST_PURPOSE_MISS);
+				//pTargetPC->BattleActionEvent(QUEST_PURPOSE_GET_MISS);
+				if (pTargetNPC->GetNPC_CSVData()->Type != VILLAGE_NPC)
+				{
+					if (pTargetNPC->GetDamage_Unit()->dwUnitUnique <= 0)
+						pTargetNPC->SetDamageUnit(pClone->GetPoolArray(), pClone->GetFieldUnique(), pClone->m_X, pClone->m_Y);
+
+					/*추가 -> 유저 주변 합공몬스터 체크 후 어그로 끌어주기*/
+					if(pClone->GetCurrentMap())
+						pClone->GetCurrentMap()->m_BlockManager.SetJoinAttackDamageUnit(pClone, MAX_JOIN_ATTACK_SCOPE);
+				}
+				return;
+			}
+			//pClone->SetLastTargetNpcField(pTargetNPC->GetFieldUnique()); // 마지막 공격 대상 필드유니크 세팅
+			//pClone->ResetConExpTick();
+
+
+				// 어그로 끌어주고 
+				if (pTargetNPC->GetDamage_Unit()->dwUnitUnique <= 0)
+					pTargetNPC->SetDamageUnit(pClone->GetPoolArray(), pClone->GetFieldUnique(), pClone->m_X, pClone->m_Y);
+
+				/*추가 -> 유저 주변 합공몬스터 체크 후 어그로 끌어주기*/
+				if(pClone->GetCurrentMap())
+					pClone->GetCurrentMap()->m_BlockManager.SetJoinAttackDamageUnit(pClone, MAX_JOIN_ATTACK_SCOPE);
+
+				sendmsg._result = 0;
+				BOOL bCritical = FALSE;
+				INT32 i32SuccessSpecialCount = 0;
+				INT32 i32AllDamage = AttackTarget_Damage_CLONENPC(pUnit, pTarget, bCritical);
+				INT32 i32SpecialDamage = GetAttackExtraDamage_Chosun2M(pUnit, pTarget, i32AllDamage, i32SuccessSpecialCount);
+				INT32 i32TotalDamage = i32AllDamage + i32SpecialDamage;
+				INT32 i32AttackAnimationIdx = pClone->GetAttAnimationIndex(FALSE);
+
+				int iExp = pTargetNPC->GetNpcAttackExp(i32TotalDamage); //
+
+				//int iTendency = pTargetNPC->GetNPCAttackTendency(iDamage);
+
+				int iMyLevel = pClone->GetLevel(); // 내 레벨
+
+				int iLevel = iMyLevel - pTargetNPC->GetLevel();// 레벨 차이
+
+				//CParty* pParty = pPC->GetParty();
+
+				// _i32LimitLevel이 1이면 레벨제한x
+				if (pTargetNPC->GetNPC_CSVData()->_i32LimitLevel == 0 && iLevel > 0)	// 케릭 레벨이 몬스터 레벨보다 높으면  
+				{
+					if (iLevel < 200)	// 1 ~ 199 렙차 많이 날수록 경험치 깎음, 케릭터가 200이상 높으면 경험치 못먹음 
+					{
+						iExp -= iExp * iLevel * 0.005;
+						//
+						//if (pParty)
+						//{
+						//	int iNeerCnt = pParty->GetScopeUserCount(pPC);
+						//	if (iNeerCnt >= 1)
+						//	{
+						//		pParty->AddExp(iExp, pTargetNPC->GetFieldUnique(), pPC,  pParty->GetScopeLowerLevel(pPC), iNeerCnt);
+						//	}
+						//	else
+						//		pPC->AddExp(iExp, pTargetNPC->GetFieldUnique()); // 나혼자 경험치 먹고 
+						//}
+						//else
+						//{
+						//pPC->AddExp(iExp, pTargetNPC->GetFieldUnique()); // 나혼자 경험치 먹고 
+						g_CLoneManager.AddExp(pClone,iExp);
+						//}
+
+					}
+				}
+				else // 케릭 레벨이 몬스터 레벨보다 낮으면  
+				{
+					//if (pParty)
+					//{
+					//	int iNeerCnt = pParty->GetScopeUserCount(pPC);
+					//	if (iNeerCnt >= 1)
+					//	{
+					//		pParty->AddExp(iExp, pTargetNPC->GetFieldUnique(), pPC, pParty->GetScopeLowerLevel(pPC), iNeerCnt);
+					//	}
+					//	else
+					//		pPC->AddExp(iExp, pTargetNPC->GetFieldUnique()); // 나혼자 경험치 먹고 
+					//}
+					//else
+					//pPC->AddExp(iExp, pTargetNPC->GetFieldUnique());
+					g_CLoneManager.AddExp(pClone, iExp);
+				}
+				
+				pTargetNPC->AddHP(-i32TotalDamage);
+
+				if (pTargetNPC->GetCurrentMap() != NULL)
+				{
+					if (pTargetNPC->GetCurrentMap()->GetMapTYPE() == MAP_TYPE_BOSS_RAID)
+					{
+						CGameMap_BossRaidMap* pBossRaidMap = dynamic_cast<CGameMap_BossRaidMap*>(pTargetNPC->GetCurrentMap());
+						if (pBossRaidMap != NULL)
+						{
+							pBossRaidMap->AddDamageList(pPC->GetCharacterUnique(), i32TotalDamage);
+						}
+					}
+					if (pTargetNPC->GetCurrentMap()->GetMapTYPE() == MAP_TYPE_INSTANCE)
+					{
+						CGameMap_Instance* pInstanceMap = dynamic_cast<CGameMap_Instance*>(pTargetNPC->GetCurrentMap());
+						if (pInstanceMap != NULL)
+						{
+							if (pInstanceMap->GetInstanceType() == ENUM_INSTANCETYPE::ENUM_INSTANCETYPE_DPSDUNGEON)
+							{
+								pInstanceMap->AddDpsDungeonDamage(i32TotalDamage);
+							}
+						}
+					}
+				}
+
+				if (pUnit->GetUnitTYPE() == eUnitType::PC)
+				{
+					CUnitPC* _pUser = dynamic_cast<CUnitPC*>(pUnit);
+					if (_pUser != NULL)
+					{
+						_pUser->CheckMaxDamageLog(pTarget, i32TotalDamage);
+					}
+				}
+				//g_GameManager.WriteAttackException(pPC, sendmsg.iDamage, pTargetNPC->GetIndex());
+
+				sendmsg._ui32Damage[0] = i32AllDamage;
+				extramsg._ui32Damage[0] = i32AllDamage;
+				sendmsg.i32Critical = bCritical;
+				extramsg.i32Critical = bCritical;
+				sendmsg._result |= (pTargetNPC->GetHpPercent() << 4);
+				//extramsg._result |= (pTargetNPC->GetHpPercent() << 4);
+				//방송
+				pCurrentMap->m_BlockManager.Attack_to_BroadCast(pClone, pTargetNPC, &sendmsg);
+				pCurrentMap->m_BlockManager.Attack_to_BroadCast(pClone, pTargetNPC, &extramsg);
+
+				//pPC->AddStatExp(pTargetNPC->GetNPC_CSVData()->Index, STAT_TYPE::STAT_TYPE_STR, 1, true, pTargetNPC->GetNPC_CSVData()->_i32Element, pTargetNPC->GetNPC_CSVData()->_i32StatExp);
+				//pPC->ETCEvent(QUEST_PURPOSE_TYPE::QUEST_PURPOSE_GRADE_SELECT, pTargetNPC->GetIndex());
+
+				// 미스아니고, 맞는애가 npc이고, 때리는애가 pc일때 huntEvent에서 체크할 리스트에 insert 해준다. 
+				//pTargetNPC->InsertHuntEventList(pPC, i32AllDamage);
+				//강제 셋팅
+				if (pTargetNPC->GetCurrentHP() > 0)
+				{
+					if (StiffnssCheck(pClone, pTarget))
+					{
+						pTargetNPC->SetStiffnessTime();
+						SP_STIFFNESS sendstiffness;
+						sendstiffness._dwTargetFieldUnique = pTargetNPC->GetFieldUnique();
+						sendstiffness._dwFieldUnique = pUnit->GetFieldUnique();
+						if (pTargetNPC->GetCurrentMap())
+							pTargetNPC->GetCurrentMap()->m_BlockManager.BroadCast(pTarget, (BYTE*)&sendstiffness, sizeof(SP_STIFFNESS));
+					}
+				}
+				Kill_Unit(pClone, pTargetNPC, (INT32)ENUM_ATTACK_TYPE::ENUM_ATTACK_TYPE_ATTACK, sendmsg._i32AttackType[0]);
+
+				if (pTarget->GetAlive() == TRUE)
+				{
+					/*if(bAttackMultiple)
+						pPC->AttackSpecialEffect(pPC, pTarget, sendmsg._ui32Damage[0]);
+					else*/
+					//pPC->AttackSpecialEffect(pPC, pTarget, i32AllDamage);
+					pClone->AttackSpecialEffect(pClone, pTarget, i32AllDamage);
+				}
+				pClone->SetCloneAttackLoopTick(GetTickCount64() + pClone->GetAttackSpeedServer());
+				//pPC->BattleActionEvent(QUEST_PURPOSE_TYPE::QUEST_PURPOSE_HIT);
+
+		}
+	}
+}
+
+// PVE 상황
+INT32 CMath::AttackTarget_Damage_PCNPC(CUnit* pUnit, CUnit* pTarget, BOOL &bCriticalout)
+{
+
+	auto pPC = dynamic_cast<CUnitPC*> (pUnit);
+	auto pTargetPC = dynamic_cast<CUnitNPC*> (pTarget);
+	
+	if (pPC == NULL || pTargetPC == NULL)
+	{
+		return 0;
+	}
+	
+	DOUBLE i32FirstDamage = 0;		// 1차 대미지(기본 대미지)
+	DOUBLE i32SecondDamage = 0;		// 2차 대미지(대미지 증가)
+	DOUBLE i32ThirdDamage = 0;		// 3차 대미지(일격 필살 대미지)
+	DOUBLE i32TotalDamage = 0;		// 최종 대미지
+	DOUBLE i32AddDamage = 0;		//추가 대미지
+	
+	
+	DOUBLE i32Att = pPC->GetComputedPower(pPC->GetAttackType());				// 공격 타입에 따라 가져온 공격력
+	DOUBLE i32Def = pTargetPC->GetComputedDef((INT32)pPC->GetAttackType());	// 공격자의 타입에 따라 가져온 타겟의 방어력
+	DOUBLE i32DefIgnore = pPC->GetComputedDefIgnore(pPC->GetAttackType());	// 공격자의 타입에 따라 가져온 방어력 무시
+
+	// 1차 대미지계산 : 기본 대미지
+	// (공격력 * ( 1 - ( 방어력 - 방어력 무시) / (방어력 + 방어상수500))) * (0.95~1.05)
+	// 만약 방어력 - 방어력무시가 0 이나오면 분자가 0 이므로 공격력 * 랜덤값만 적용
+	DOUBLE i32FirstDamageRandom = g_GameManager.getRandomNumber(95, 105) * 0.01;
+	if (i32Def - i32DefIgnore <= 0)
+	{
+		i32FirstDamage = i32Att * i32FirstDamageRandom;
+	}
+	else
+	{
+		i32FirstDamage = (i32Att * (1 - (i32Def - i32DefIgnore) / (i32Def + 500))) * i32FirstDamageRandom;
+	}
+
+	
+	
+	// 2차 대미지 계산  : 대미지 증가 계산
+	// 대미지 증가 수치 : 공격자 대미지 증가 - 방어자 대미지 증가 무시
+	DOUBLE i32IncreaseDamage = pPC->GetComputedIncreaseDamage(pPC->GetAttackType()) - pTargetPC->GetComputedIncreaseDamageIgnore((INT32)pPC->GetAttackType());
+	if (i32IncreaseDamage <= 0)
+	{
+		// 대미지 증가 수치가 <= 0 이면 기본 대미지
+		i32SecondDamage = i32FirstDamage;
+	}
+	else
+	{
+		// 기본 대미지 * ( 1+ 대미지 증가 수치 * 랜덤값 0.01~0.05)
+		i32SecondDamage = i32FirstDamage * (1 + i32IncreaseDamage * 0.01);
+	}
+	
+	// 3차 대미지 계산 : 일격 필살
+	// 일격 필살 발동 확률 계산 => 일격 필살 확률 >= 랜덤값 (1 ~ 100);
+	bCriticalout = FALSE;
+	INT32 i32CriticalRandom = g_GameManager.getRandomNumber(0, 100);
+	DOUBLE i32ThirdDamageRandom = g_GameManager.getRandomNumber(1, 5) * 0.01;
+	INT32 i32CriticalPersent = (1.0 - 1.0 / (1 + (pPC->m_BalanceInfo._i32PartsArray[BALANCE_POWER_PARTS32::BALANCE_POWER_PARTS32_Critical_Percent] - 0) / 50.0)) * 100;
+	if (i32CriticalRandom <= i32CriticalPersent)
+	{ //(1-1/(1+(일격필살 확률-일격필살 회피)/50))*100
+		bCriticalout = TRUE;
+	}
+	//if (i32CriticalRandom <= pPC->m_BalanceInfo._i32PartsArray[BALANCE_POWER_PARTS32::BALANCE_POWER_PARTS32_Critical_Percent])
+	//{
+	//	bCriticalout = TRUE;
+	//}
+
+
+	if (bCriticalout == TRUE)
+	{
+		// 일격 필살 대미지 증가 수치 : 공격자 일격 필살 대미지 증가 - 방어자 일격 필살 대미지 증가 무시
+		DOUBLE i32IncreaseCritical = pPC->GetComputedIncreaseCritical() - pTargetPC->GetComputedIncreaseCriticalIgnore();
+	
+		if (i32IncreaseCritical <= 0)
+		{
+			// 대미지 증가 수치가 <= 0 이면 2차 대미지
+			i32ThirdDamage = i32SecondDamage;
+		}
+		else
+		{
+			// 대미지 증가 수치가 > 0 이면  (2차 대미지) *(1.25 + (대미지 증가 수치 * 0.001) + 랜덤값(0.01~0.05))
+			i32ThirdDamage = i32SecondDamage * (1.25 + (i32IncreaseCritical * 0.001) + i32ThirdDamageRandom);
+		}
+		
+	}
+	else
+	{
+		// 일격 필살 미 발동 시 대미지 : 2차 대미지
+		i32ThirdDamage = i32SecondDamage;
+	}
+	
+	// 최종 대미지 계산 PVP, PVE 공격력 증가, 방어력 증가 이용
+	// 최종 대미지 : 3차 대미지  + ( p 공 - p방)
+	INT32 i32PveAttack = pPC->GetComputedPvePower(); 
+	INT32 i32PveDefense = pTargetPC->GetComputedPveDef(); 
+	i32TotalDamage = i32ThirdDamage + (i32PveAttack - i32PveDefense);
+
+		// 추가 대미지 증가 수치 : 공격자 추가 대미지 증가 - 방어자 추가 대미지 증가 무시
+	i32AddDamage = pPC->GetComputedAddPowerIncrease(pPC->GetAttackType()) - pTargetPC->GetComputedAddPowerIncreaseIgnore((INT32)pPC->GetAttackType());
+	if (i32AddDamage > 0)
+	{
+		// 추가 대미지 증가 수치가 > 0 이면 최종 대미지 *  ( 1 + 추가 대미지 증가 수치 * 0.01)
+		// 아니면 그냥 최종 대미지
+		i32TotalDamage = i32TotalDamage * (1 + i32AddDamage * 0.01);
+	}
+
+	if ((INT32)i32TotalDamage <= 0)
+	{
+		i32TotalDamage = 1;
+	}
+
+	return i32TotalDamage;
+	
+}
+
+
+// 유저 대 유저 대미지 계산식(PVP)
+INT32 CMath::AttackTarget_Damage_PCPC(CUnit* pUnit, CUnit* pTarget, BOOL& bCriticalout)
+{
+	auto pPC = dynamic_cast<CUnitPC*> (pUnit);
+	auto pTargetPC = dynamic_cast<CUnitPC*> (pTarget);
+
+	if (pPC == NULL || pTargetPC == NULL)
+	{
+		return 0;
+	}
+
+	DOUBLE i32FirstDamage = 0;		// 1차 대미지(기본 대미지)
+	DOUBLE i32SecondDamage = 0;		// 2차 대미지(대미지 증가)
+	DOUBLE i32ThirdDamage = 0;		// 3차 대미지(일격 필살 대미지)
+	DOUBLE i32TotalDamage = 0;		// 최종 대미지
+	DOUBLE i32AddDamage = 0;			//추가 대미지
+	
+	DOUBLE i32Att = pPC->GetComputedPower(pPC->GetAttackType());				// 공격 타입에 따라 가져온 공격력
+	DOUBLE i32Def = pTargetPC->GetComputedDef(pPC->GetAttackType());			// 공격자의 타입에 따라 가져온 타겟의 방어력
+	DOUBLE i32DefIgnore = pPC->GetComputedDefIgnore(pPC->GetAttackType());	// 공격자의 타입에 따라 가져온 방어력 무시
+	
+	// 1차 대미지계산 : 기본 대미지
+	// (공격력 * ( 1 - ( 방어력 - 방어력 무시) / (방어력 + 방어상수500))) * (0.95~1.05)
+	// 만약 방어력 - 방어력무시가 0 이나오면 분자가 0 이므로 공격력 * 랜덤값만 적용
+	DOUBLE i32FirstDamageRandom = g_GameManager.getRandomNumber(95, 105) * 0.01;
+	if (i32Def - i32DefIgnore <= 0)
+	{
+		i32FirstDamage = i32Att * i32FirstDamageRandom;
+	}
+	else
+	{
+		i32FirstDamage = (i32Att * (1 - (i32Def - i32DefIgnore) / (i32Def + 500))) * i32FirstDamageRandom;
+	}
+
+	// 2차 대미지 계산  : 대미지 증가 계산
+	// 대미지 증가 수치 : 공격자 대미지 증가 - 방어자 대미지 증가 무시
+	DOUBLE i32IncreaseDamage = pPC->GetComputedIncreaseDamage(pPC->GetAttackType()) - pTargetPC->GetComputedIncreaseDamageIgnore(pPC->GetAttackType());
+	if (i32IncreaseDamage <= 0)
+	{	
+		// 대미지 증가 수치가 <= 0 이면 기본 대미지
+		i32SecondDamage =  i32FirstDamage;
+	}
+	else
+	{
+		// 기본 대미지 * ( 1+ 대미지 증가 수치 * 0.01)
+		i32SecondDamage = i32FirstDamage * (1 + i32IncreaseDamage * 0.01);
+	}
+
+	// 3차 대미지 계산 : 일격 필살
+	// 일격 필살 발동 확률 계산 => 일격 필살 확률 >= 랜덤값 (1 ~ 100);
+	bCriticalout = FALSE;
+	INT32 i32CriticalRandom = g_GameManager.getRandomNumber(0, 100);		
+	DOUBLE i32ThirdDamageRandom = g_GameManager.getRandomNumber(1, 5) * 0.01f;
+	//if (i32CriticalRandom <= pPC->m_BalanceInfo._i32PartsArray[BALANCE_POWER_PARTS32::BALANCE_POWER_PARTS32_Critical_Percent])
+	//{
+	//	bCriticalout = TRUE;
+	//}
+	INT32 i32CriticalPersent = (1.0 - 1.0 / (1 + (pPC->m_BalanceInfo._i32PartsArray[BALANCE_POWER_PARTS32::BALANCE_POWER_PARTS32_Critical_Percent] - 0) / 50.0)) * 100;
+	if (i32CriticalRandom <= i32CriticalPersent)
+	{ //(1-1/(1+(일격필살 확률-일격필살 회피)/50))*100
+		bCriticalout = TRUE;
+	}
+	if (bCriticalout == TRUE)
+	{
+		// 일격 필살 대미지 증가 수치 : 공격자 일격 필살 대미지 증가 - 방어자 일격 필살 대미지 증가 무시
+		DOUBLE i32IncreaseCritical = pPC->GetComputedIncreaseCritical() - pTargetPC->GetComputedIncreaseCriticalIgnore();
+		
+		if (i32IncreaseCritical <= 0)
+		{
+			// 대미지 증가 수치가 <= 0 이면 2차 대미지
+			i32ThirdDamage = i32SecondDamage;
+		}
+		else
+		{
+			// 대미지 증가 수치가 > 0 이면  (2차 대미지) *(1.25 + (대미지 증가 수치 * 0.001) + 랜덤값(0.01~0.05))
+			i32ThirdDamage = i32SecondDamage * (1.25 + (i32IncreaseCritical * 0.001) + i32ThirdDamageRandom);
+		}
+	}
+	else
+	{
+		// 일격 필살 미 발동 시 대미지 : 2차 대미지
+		i32ThirdDamage = i32SecondDamage;
+	}
+
+	/// 최종 대미지 계산 PVP, PVE 공격력 증가, 방어력 증가 이용
+	// 최종 대미지 : 3차 대미지  + ( p 공 - p방)
+	INT32 i32PvPAttack = pPC->GetComputedPvpPower(); 
+	INT32 i32PvPDefense = pTargetPC->GetComputedPvpDef(); 
+	i32TotalDamage = i32ThirdDamage + (i32PvPAttack - i32PvPDefense);
+
+	// 추가 대미지 : 혼불 계산
+	INT32 i32ComputedAddPowerIncreaseIgnore = 0;
+	i32ComputedAddPowerIncreaseIgnore = pTargetPC->GetComputedAddPowerIncreaseIgnore(pPC->GetAttackType());
+	// 추가 대미지 증가 수치 : 공격자 추가 대미지 증가 - 방어자 추가 대미지 증가 무시
+	i32AddDamage = pPC->GetComputedAddPowerIncrease(pPC->GetAttackType()) - i32ComputedAddPowerIncreaseIgnore;
+	if (i32AddDamage > 0)
+	{
+		// 추가 대미지 증가 수치가 > 0 이면 최종 대미지 *  ( 1 + 추가 대미지 증가 수치 * 0.01)
+		// 아니면 그냥 최종 대미지
+		i32TotalDamage = i32TotalDamage * (1 + i32AddDamage * 0.01);
+	}
+	i32TotalDamage *= PVP_DAMAGE_PERSENT;
+
+	if ((INT32)i32TotalDamage <= 0)
+	{
+		i32TotalDamage = 1;
+	}
+
+	return i32TotalDamage;
+}
+
+// NPC가 PC 때릴때 혼불 x
+INT32 CMath::AttackTarget_Damage_NPCPC(CUnit* pUnit, CUnit* pTarget, BOOL& bCriticalout)
+{
+	auto pNPC = dynamic_cast<CUnitNPC*>(pUnit);
+	auto pTargetPC = dynamic_cast<CUnitPC*> (pTarget);
+	
+	if (pNPC == NULL || pTargetPC == NULL)
+	{
+		return 0;
+	}
+	
+	DOUBLE i32FirstDamage = 0;		// 1차 대미지(기본 대미지)
+	DOUBLE i32SecondDamage = 0;		// 2차 대미지(대미지 증가)
+	DOUBLE i32ThirdDamage = 0;		// 3차 대미지(일격 필살 대미지)
+	DOUBLE i32TotalDamage = 0;		// 최종 대미지
+	DOUBLE i32AddDamage = 0;			//추가 대미지
+	
+	// 1차 대미지계산 : 기본 대미지
+	DOUBLE i32Att = pNPC->GetComputedPower(pNPC->GetAttackType());				// 공격 타입에 따라 가져온 공격력
+	DOUBLE i32Def = pTargetPC->GetComputedDef((USER_ATTACK_TYPE)pNPC->GetAttackType());			// 공격자의 타입에 따라 가져온 타겟의 방어력
+	DOUBLE i32DefIgnore = pNPC->GetComputedDefIgnore(pNPC->GetAttackType());	// 공격자의 타입에 따라 가져온 방어력 무시
+	
+	// 1차 대미지계산 : 기본 대미지
+	// (공격력 * ( 1 - ( 방어력 - 방어력 무시) / (방어력 + 방어상수500))) * (0.95~1.05)
+	// 만약 방어력 - 방어력무시가 0 이나오면 분자가 0 이므로 공격력 * 랜덤값만 적용
+	DOUBLE i32FirstDamageRandom = g_GameManager.getRandomNumber(95, 105) * 0.01;
+	if (i32Def - i32DefIgnore <= 0)
+	{
+		i32FirstDamage = i32Att * i32FirstDamageRandom;
+	}
+	else
+	{
+		i32FirstDamage = (i32Att * (1 - (i32Def - i32DefIgnore) / (i32Def + 500))) * i32FirstDamageRandom;
+	}
+	
+	// 2차 대미지 계산  : 대미지 증가 계산
+	// 대미지 증가 수치 : 공격자 대미지 증가 - 방어자 대미지 증가 무시
+	DOUBLE i32IncreaseDamage = pNPC->GetComputedIncreaseDamage(pNPC->GetAttackType()) - pTargetPC->GetComputedIncreaseDamageIgnore((USER_ATTACK_TYPE)pNPC->GetAttackType());
+	if (i32IncreaseDamage <= 0)
+	{
+		// 대미지 증가 수치가 <= 0 이면 기본 대미지
+		i32SecondDamage = i32FirstDamage;
+	}
+	else
+	{
+		// 기본 대미지 * ( 1+ 대미지 증가 수치 * 랜덤값 0.01~0.05)
+		i32SecondDamage = i32FirstDamage * (1 + i32IncreaseDamage * 0.01);
+	}
+	
+	// 3차 대미지 계산 : 일격 필살
+	// 일격 필살 발동 확률 계산 => 일격 필살 확률 >= 랜덤값 (1 ~ 100);
+	bCriticalout = FALSE;
+	INT32 i32CriticalRandom = g_GameManager.getRandomNumber(0, 100);
+	DOUBLE i32ThirdDamageRandom = g_GameManager.getRandomNumber(1, 5) * 0.01f;
+	INT32 i32CriticalPersent = (1.0 - 1.0 / (1 + (pNPC->GetComputedCriticalPercent() - 0) / 50.0)) * 100;
+
+	if (i32CriticalRandom <= i32CriticalPersent)
+	{
+		bCriticalout = TRUE;
+	}
+
+	if (bCriticalout == TRUE)
+	{
+		// 일격 필살 대미지 증가 수치 : 공격자 일격 필살 대미지 증가 - 방어자 일격 필살 대미지 증가 무시
+		DOUBLE i32IncreaseCritical = pNPC->GetComputedIncreaseCritical() - pTargetPC->GetComputedIncreaseCriticalIgnore();
+	
+		if (i32IncreaseCritical <= 0)
+		{
+			// 대미지 증가 수치가 <= 0 이면 2차 대미지
+			i32ThirdDamage = i32SecondDamage;
+		}
+		else
+		{
+			// 대미지 증가 수치가 > 0 이면  (2차 대미지) *(1.25 + (대미지 증가 수치 * 0.001) + 랜덤값(0.01~0.05))
+			i32ThirdDamage = i32SecondDamage * (1.25 + (i32IncreaseCritical * 0.001) + i32ThirdDamageRandom);
+		}
+	}
+	else
+	{
+		// 일격 필살 미 발동 시 대미지 : 2차 대미지
+		i32ThirdDamage = i32SecondDamage;
+	}
+	
+	// 최종 대미지 계산 PVP, PVE 공격력 증가, 방어력 증가 이용
+	// 최종 대미지 : 3차 대미지 * ( 1 + (PVE 공격력 - PVE 방어력) * 0.01)
+	INT32 i32PveAttack = pNPC->GetComputedPvePower(); // PVE 공격력
+	INT32 i32PveDefense = pTargetPC->GetComputedPveDef(); // PVE 방어력
+	i32TotalDamage = i32ThirdDamage + (i32PveAttack - i32PveDefense);
+
+	if ((INT32)i32TotalDamage <= 0)
+	{
+		i32TotalDamage = 1;
+	}
+
+	return i32TotalDamage;
+	
+}
+
+// NPC가 NPC 때릴때 혼불 x
+INT32 CMath::AttackTarget_Damage_NPCNPC(CUnit* pUnit, CUnit* pTarget, BOOL& bCriticalout)
+{
+	auto pNPC = dynamic_cast<CUnitNPC*>(pUnit);
+	auto pTargetNPC = dynamic_cast<CUnitNPC*> (pTarget);
+
+	if (pNPC == NULL || pTargetNPC == NULL)
+	{
+		return 0;
+	}
+
+	DOUBLE i32FirstDamage = 0;		// 1차 대미지(기본 대미지)
+	DOUBLE i32SecondDamage = 0;		// 2차 대미지(대미지 증가)
+	DOUBLE i32ThirdDamage = 0;		// 3차 대미지(일격 필살 대미지)
+	DOUBLE i32TotalDamage = 0;		// 최종 대미지
+	DOUBLE i32AddDamage = 0;			//추가 대미지
+
+	DOUBLE i32Att = pNPC->GetComputedPower(pNPC->GetAttackType());				// 공격 타입에 따라 가져온 공격력
+	DOUBLE i32Def = pTargetNPC->GetComputedDef(pNPC->GetAttackType());			// 공격자의 타입에 따라 가져온 타겟의 방어력
+	DOUBLE i32DefIgnore = pNPC->GetComputedDefIgnore(pNPC->GetAttackType());	// 공격자의 타입에 따라 가져온 방어력 무시
+
+
+	// 1차 대미지계산 : 기본 대미지
+	// (공격력 * ( 1 - ( 방어력 - 방어력 무시) / (방어력 + 방어상수500))) * (0.95~1.05)
+	// 만약 방어력 - 방어력무시가 0 이나오면 분자가 0 이므로 공격력 * 랜덤값만 적용
+	DOUBLE i32FirstDamageRandom = g_GameManager.getRandomNumber(95, 105) * 0.01;
+	if (i32Def - i32DefIgnore <= 0)
+	{
+		i32FirstDamage = i32Att * i32FirstDamageRandom;
+	}
+	else
+	{
+		i32FirstDamage = (i32Att * (1 - (i32Def - i32DefIgnore) / (i32Def + 500))) * i32FirstDamageRandom;
+	}
+
+	// 2차 대미지 계산  : 대미지 증가 계산
+	// 대미지 증가 수치 : 공격자 대미지 증가 - 방어자 대미지 증가 무시
+	DOUBLE i32IncreaseDamage = pNPC->GetComputedIncreaseDamage(pNPC->GetAttackType()) - pTargetNPC->GetComputedIncreaseDamageIgnore(pNPC->GetAttackType());
+	if (i32IncreaseDamage <= 0)
+	{
+		// 대미지 증가 수치가 <= 0 이면 기본 대미지
+		i32SecondDamage = i32FirstDamage;
+	}
+	else
+	{
+		// 기본 대미지 * ( 1+ 대미지 증가 수치 * 랜덤값 0.01~0.05)
+		i32SecondDamage = i32FirstDamage * (1 + i32IncreaseDamage * 0.01);
+	}
+
+	// 3차 대미지 계산 : 일격 필살
+	// 일격 필살 발동 확률 계산 => 일격 필살 확률 >= 랜덤값 (1 ~ 100);
+	bCriticalout = FALSE;
+	INT32 i32CriticalRandom = g_GameManager.getRandomNumber(0, 100);
+	DOUBLE i32ThirdDamageRandom = g_GameManager.getRandomNumber(1, 5) * 0.01f;
+	if (i32CriticalRandom <= pNPC->GetComputedCriticalPercent())
+	{
+		bCriticalout = TRUE;
+	}
+
+	if (bCriticalout == TRUE)
+	{
+		// 일격 필살 대미지 증가 수치 : 공격자 일격 필살 대미지 증가 - 방어자 일격 필살 대미지 증가 무시
+		DOUBLE i32IncreaseCritical = pNPC->GetComputedIncreaseCritical() - pTargetNPC->GetComputedIncreaseCriticalIgnore();
+		if (i32IncreaseCritical <= 0)
+		{
+			// 대미지 증가 수치가 <= 0 이면 2차 대미지
+			i32ThirdDamage = i32SecondDamage;
+		}
+		else
+		{
+			// 대미지 증가 수치가 > 0 이면  (2차 대미지) *(1.25 + (대미지 증가 수치 * 0.001) + 랜덤값(0.01~0.05))
+			i32ThirdDamage = i32SecondDamage * (1.25 + (i32IncreaseCritical * 0.001) + i32ThirdDamageRandom);
+		}
+		
+	}
+	else
+	{
+		// 일격 필살 미 발동 시 대미지 : 2차 대미지
+		i32ThirdDamage = i32SecondDamage;
+	}
+
+	// 최종 대미지 계산 PVP, PVE 공격력 증가, 방어력 증가 이용
+	// 최종 대미지 : 3차 대미지 * ( 1 + (PVE 공격력 - PVE 방어력) * 0.01)
+	INT32 i32PveAttack = pNPC->GetComputedPvePower(); // PVE 공격력
+	INT32 i32PveDefense = pTargetNPC->GetComputedPveDef(); // PVE 방어력
+	i32TotalDamage = i32ThirdDamage + (i32PveAttack - i32PveDefense);
+
+	if ((INT32)i32TotalDamage <= 0)
+	{
+		i32TotalDamage = 1;
+	}
+
+	return i32TotalDamage;
+}
+
+INT32 CMath::AttackTarget_Damage_CLONENPC(CUnit* pUnit, CUnit* pTarget, BOOL& bCriticalout)
+{
+	auto pPC = dynamic_cast<CUnitClone*> (pUnit);
+	auto pNPC = dynamic_cast<CUnitNPC*> (pTarget);
+	if (pPC == NULL || pNPC == NULL)
+	{
+		return 0;
+	}
+	
+	DOUBLE i32FirstDamage = 0;		// 1차 대미지(기본 대미지)
+	DOUBLE i32SecondDamage = 0;		// 2차 대미지(대미지 증가)
+	DOUBLE i32ThirdDamage = 0;		// 3차 대미지(일격 필살 대미지)
+	DOUBLE i32TotalDamage = 0;		// 최종 대미지
+	DOUBLE i32AddDamage = 0;			//추가 대미지
+	
+	// 1차 대미지계산 : 기본 대미지
+	DOUBLE i32Att = pPC->GetComputedPower(pPC->GetAttackType());				// 공격 타입에 따라 가져온 공격력
+	DOUBLE i32Def = pNPC->GetComputedDef((INT32)pPC->GetAttackType());			// 공격자의 타입에 따라 가져온 타겟의 방어력
+	DOUBLE i32DefIgnore = pPC->GetComputedDefIgnore(pPC->GetAttackType());	// 공격자의 타입에 따라 가져온 방어력 무시
+	
+	// 1차 대미지계산 : 기본 대미지
+	// (공격력 * ( 1 - ( 방어력 - 방어력 무시) / (방어력 + 방어상수500))) * (0.95~1.05)
+	// 만약 방어력 - 방어력무시가 0 이나오면 분자가 0 이므로 공격력 * 랜덤값만 적용
+	DOUBLE i32FirstDamageRandom = g_GameManager.getRandomNumber(95, 105) * 0.01;
+	if (i32Def - i32DefIgnore <= 0)
+	{
+		i32FirstDamage = i32Att * i32FirstDamageRandom;
+	}
+	else
+	{
+		i32FirstDamage = (i32Att * (1 - (i32Def - i32DefIgnore) / (i32Def + 500))) * i32FirstDamageRandom;
+	}
+	
+	// 2차 대미지 계산  : 대미지 증가 계산
+	// 대미지 증가 수치 : 공격자 대미지 증가 - 방어자 대미지 증가 무시
+	DOUBLE i32IncreaseDamage = pPC->GetComputedIncreaseDamage(pPC->GetAttackType()) - pNPC->GetComputedIncreaseDamageIgnore((INT32)pPC->GetAttackType());
+	if (i32IncreaseDamage <= 0)
+	{
+		// 대미지 증가 수치가 <= 0 이면 기본 대미지
+		i32SecondDamage = i32FirstDamage;
+	}
+	else
+	{
+		// 기본 대미지 * ( 1+ 대미지 증가 수치 * 랜덤값 0.01~0.05)
+		i32SecondDamage = i32FirstDamage * (1 + i32IncreaseDamage * 0.01);
+	}
+	
+	// 3차 대미지 계산 : 일격 필살
+	// 일격 필살 발동 확률 계산 => 일격 필살 확률 >= 랜덤값 (1 ~ 100);
+	bCriticalout = FALSE;
+	INT32 i32CriticalRandom = g_GameManager.getRandomNumber(0, 100);
+	DOUBLE i32ThirdDamageRandom = g_GameManager.getRandomNumber(1, 5) * 0.01f;
+	if (i32CriticalRandom <= pPC->m_BalanceInfo._i32PartsArray[BALANCE_POWER_PARTS32::BALANCE_POWER_PARTS32_Critical_Percent])
+	{
+		bCriticalout = TRUE;
+	}
+	if (bCriticalout == TRUE)
+	{
+		// 일격 필살 대미지 증가 수치 : 공격자 일격 필살 대미지 증가 - 방어자 일격 필살 대미지 증가 무시
+		DOUBLE i32IncreaseCritical = pPC->GetComputedIncreaseCritical() - pNPC->GetComputedIncreaseCriticalIgnore();
+	
+		if (i32IncreaseCritical <= 0)
+		{
+			// 대미지 증가 수치가 <= 0 이면 2차 대미지
+			i32ThirdDamage = i32SecondDamage;
+		}
+		else
+		{
+			// 대미지 증가 수치가 > 0 이면  (2차 대미지) *(1.25 + (대미지 증가 수치 * 0.001) + 랜덤값(0.01~0.05))
+			i32ThirdDamage = i32SecondDamage * (1.25 + (i32IncreaseCritical * 0.001) + i32ThirdDamageRandom);
+		}
+	}
+	else
+	{
+		// 일격 필살 미 발동 시 대미지 : 2차 대미지
+		i32ThirdDamage = i32SecondDamage;
+	}
+	
+	// 최종 대미지 계산 PVP, PVE 공격력 증가, 방어력 증가 이용
+	// 최종 대미지 : 3차 대미지 * ( 1 + (PVE 공격력 - PVE 방어력) * 0.01)
+	INT32 i32PvPAttack = pPC->GetComputedPvePower(); // PVE 공격력
+	INT32 i32PvPDefense = pNPC->GetComputedPveDef(); // PVE 방어력
+	i32TotalDamage = i32ThirdDamage + (i32PvPAttack - i32PvPDefense);
+	
+	if ((INT32)i32TotalDamage <= 0)
+	{
+		i32TotalDamage = 1;
+	}
+
+	return i32TotalDamage;
+}
+
+INT32 CMath::AttackTarget_Damage_CLONEPC(CUnit* pUnit, CUnit* pTarget, BOOL& bCriticalout)
+{
+	auto pPC = dynamic_cast<CUnitClone*> (pUnit);
+	auto pTargetPC = dynamic_cast<CUnitPC*> (pTarget);
+	if (pPC == NULL || pTargetPC == NULL)
+	{
+		return 0;
+	}
+
+	DOUBLE i32FirstDamage = 0;		// 1차 대미지(기본 대미지)
+	DOUBLE i32SecondDamage = 0;		// 2차 대미지(대미지 증가)
+	DOUBLE i32ThirdDamage = 0;		// 3차 대미지(일격 필살 대미지)
+	DOUBLE i32TotalDamage = 0;		// 최종 대미지
+	DOUBLE i32AddDamage = 0;			//추가 대미지
+
+	// 1차 대미지계산 : 기본 대미지
+	DOUBLE i32Att = pPC->GetComputedPower(pPC->GetAttackType());				// 공격 타입에 따라 가져온 공격력
+	DOUBLE i32Def = pTargetPC->GetComputedDef(pPC->GetAttackType());			// 공격자의 타입에 따라 가져온 타겟의 방어력
+	DOUBLE i32DefIgnore = pPC->GetComputedDefIgnore(pPC->GetAttackType());	// 공격자의 타입에 따라 가져온 방어력 무시
+
+
+
+	// 1차 대미지계산 : 기본 대미지
+	// (공격력 * ( 1 - ( 방어력 - 방어력 무시) / (방어력 + 방어상수500))) * (0.95~1.05)
+	// 만약 방어력 - 방어력무시가 0 이나오면 분자가 0 이므로 공격력 * 랜덤값만 적용
+	DOUBLE i32FirstDamageRandom = g_GameManager.getRandomNumber(95, 105) * 0.01;
+	if (i32Def - i32DefIgnore <= 0)
+	{
+		i32FirstDamage = i32Att * i32FirstDamageRandom;
+	}
+	else
+	{
+		i32FirstDamage = (i32Att * (1 - (i32Def - i32DefIgnore) / (i32Def + 500))) * i32FirstDamageRandom;
+	}
+
+
+	// 2차 대미지 계산  : 대미지 증가 계산
+	// 대미지 증가 수치 : 공격자 대미지 증가 - 방어자 대미지 증가 무시
+	DOUBLE i32IncreaseDamage = pPC->GetComputedIncreaseDamage(pPC->GetAttackType()) - pTargetPC->GetComputedIncreaseDamageIgnore(pPC->GetAttackType());
+	if (i32IncreaseDamage <= 0)
+	{
+		// 대미지 증가 수치가 <= 0 이면 기본 대미지
+		i32SecondDamage = i32FirstDamage;
+	}
+	else
+	{
+		// 기본 대미지 * ( 1+ 대미지 증가 수치 * 랜덤값 0.01~0.05)
+		i32SecondDamage = i32FirstDamage * (1 + i32IncreaseDamage * 0.01);
+	}
+
+	// 3차 대미지 계산 : 일격 필살
+	// 일격 필살 발동 확률 계산 => 일격 필살 확률 >= 랜덤값 (1 ~ 100);
+	bCriticalout = FALSE;
+	INT32 i32CriticalRandom = g_GameManager.getRandomNumber(0, 100);
+	DOUBLE i32ThirdDamageRandom = g_GameManager.getRandomNumber(1, 5) * 0.01f;
+	if (i32CriticalRandom <= pPC->m_BalanceInfo._i32PartsArray[BALANCE_POWER_PARTS32::BALANCE_POWER_PARTS32_Critical_Percent])
+	{
+		bCriticalout = TRUE;
+	}
+
+	if (bCriticalout == TRUE)
+	{
+		// 일격 필살 대미지 증가 수치 : 공격자 일격 필살 대미지 증가 - 방어자 일격 필살 대미지 증가 무시
+		DOUBLE i32IncreaseCritical = pPC->GetComputedIncreaseCritical() - pTargetPC->GetComputedIncreaseCriticalIgnore();
+
+
+		if (i32IncreaseCritical <= 0)
+		{
+			// 대미지 증가 수치가 <= 0 이면 2차 대미지
+			i32ThirdDamage = i32SecondDamage;
+		}
+		else
+		{
+			// 대미지 증가 수치가 > 0 이면  (2차 대미지) *(1.25 + (대미지 증가 수치 * 0.001) + 랜덤값(0.01~0.05))
+			i32ThirdDamage = i32SecondDamage * (1.25 + (i32IncreaseCritical * 0.001) + i32ThirdDamageRandom);
+		}
+	}
+	else
+	{
+		// 일격 필살 미 발동 시 대미지 : 2차 대미지
+		i32ThirdDamage = i32SecondDamage;
+	}
+
+	// 최종 대미지 계산 PVP, PVE 공격력 증가, 방어력 증가 이용
+	// 최종 대미지 : 3차 대미지 * ( 1 + (PVP 공격력 - PVP 방어력) * 0.01)
+	INT32 i32PvPAttack = pPC->GetComputedPvpPower(); // PVP 공격력
+	INT32 i32PvPDefense = pTargetPC->GetComputedPvpDef(); // PVP 방어력
+	i32TotalDamage = i32ThirdDamage + (i32PvPAttack - i32PvPDefense);
+
+	if ((INT32)i32TotalDamage <= 0)
+	{
+		i32TotalDamage = 1;
+	}
+
+	return i32TotalDamage;
+}
+
+INT32 CMath::AttackTarget_Damage_NPCCLONE(CUnit* pUnit, CUnit* pTarget, BOOL& bCriticalout)
+{
+	auto pPC = dynamic_cast<CUnitNPC*>(pUnit);
+	auto pTargetPC = dynamic_cast<CUnitClone*> (pTarget);
+
+	if (pPC == NULL || pTargetPC == NULL)
+	{
+		return 0;
+	}
+
+	DOUBLE i32FirstDamage = 0;		// 1차 대미지(기본 대미지)
+	DOUBLE i32SecondDamage = 0;		// 2차 대미지(대미지 증가)
+	DOUBLE i32ThirdDamage = 0;		// 3차 대미지(일격 필살 대미지)
+	DOUBLE i32TotalDamage = 0;		// 최종 대미지
+	DOUBLE i32AddDamage = 0;			//추가 대미지
+	
+	// 1차 대미지계산 : 기본 대미지
+	DOUBLE i32Att = pPC->GetComputedPower(pPC->GetAttackType());				// 공격 타입에 따라 가져온 공격력
+	DOUBLE i32Def = pTargetPC->GetComputedDef((USER_ATTACK_TYPE)pPC->GetAttackType());			// 공격자의 타입에 따라 가져온 타겟의 방어력
+	DOUBLE i32DefIgnore = pPC->GetComputedDefIgnore(pPC->GetAttackType());	// 공격자의 타입에 따라 가져온 방어력 무시
+
+	// 1차 대미지계산 : 기본 대미지
+	// (공격력 * ( 1 - ( 방어력 - 방어력 무시) / (방어력 + 방어상수500))) * (0.95~1.05)
+	// 만약 방어력 - 방어력무시가 0 이나오면 분자가 0 이므로 공격력 * 랜덤값만 적용
+	DOUBLE i32FirstDamageRandom = g_GameManager.getRandomNumber(95, 105) * 0.01;
+	if (i32Def - i32DefIgnore <= 0)
+	{
+		i32FirstDamage = i32Att * i32FirstDamageRandom;
+	}
+	else
+	{
+		i32FirstDamage = (i32Att * (1 - (i32Def - i32DefIgnore) / (i32Def + 500))) * i32FirstDamageRandom;
+	}
+
+	// 2차 대미지 계산  : 대미지 증가 계산
+	// 대미지 증가 수치 : 공격자 대미지 증가 - 방어자 대미지 증가 무시
+	DOUBLE i32IncreaseDamage = pPC->GetComputedIncreaseDamage(pPC->GetAttackType()) - pTargetPC->GetComputedIncreaseDamageIgnore((USER_ATTACK_TYPE)pPC->GetAttackType());
+	if (i32IncreaseDamage <= 0)
+	{
+		// 대미지 증가 수치가 <= 0 이면 기본 대미지
+		i32SecondDamage = i32FirstDamage;
+	}
+	else
+	{
+		// 기본 대미지 * ( 1+ 대미지 증가 수치 * 랜덤값 0.01~0.05)
+		i32SecondDamage = i32FirstDamage * (1 + i32IncreaseDamage * 0.01);
+	}
+
+	// 3차 대미지 계산 : 일격 필살
+	// 일격 필살 발동 확률 계산 => 일격 필살 확률 >= 랜덤값 (1 ~ 100);
+	bCriticalout = FALSE;
+	INT32 i32CriticalRandom = g_GameManager.getRandomNumber(0, 100);
+	DOUBLE i32ThirdDamageRandom = g_GameManager.getRandomNumber(1, 5) * 0.01f;
+	if (i32CriticalRandom <= pPC->GetComputedCriticalPercent())
+	{
+		bCriticalout = TRUE;
+	}
+
+	if (bCriticalout == TRUE)
+	{
+		// 일격 필살 대미지 증가 수치 : 공격자 일격 필살 대미지 증가 - 방어자 일격 필살 대미지 증가 무시
+		DOUBLE i32IncreaseCritical = pPC->GetComputedIncreaseCritical() - pTargetPC->GetComputedIncreaseCriticalIgnore();
+
+		if (i32IncreaseCritical <= 0)
+		{
+			// 대미지 증가 수치가 <= 0 이면 2차 대미지
+			i32ThirdDamage = i32SecondDamage;
+		}
+		else
+		{
+			// 대미지 증가 수치가 > 0 이면  (2차 대미지) *(1.25 + (대미지 증가 수치 * 0.001) + 랜덤값(0.01~0.05))
+			i32ThirdDamage = i32SecondDamage * (1.25 + (i32IncreaseCritical * 0.001) + i32ThirdDamageRandom);
+		}
+		
+	}
+	else
+	{
+		// 일격 필살 미 발동 시 대미지 : 2차 대미지
+		i32ThirdDamage = i32SecondDamage;
+		
+	}
+
+	// 최종 대미지 계산 PVP, PVE 공격력 증가, 방어력 증가 이용
+	// 최종 대미지 : 3차 대미지 * ( 1 + (PVE 공격력 - PVE 방어력) * 0.01)
+	INT32 i32PvPAttack = pPC->GetComputedPvePower(); // PVE 공격력
+	INT32 i32PvPDefense = pTargetPC->GetComputedPveDef(); // PVE 방어력
+	i32TotalDamage = i32ThirdDamage + (i32PvPAttack - i32PvPDefense);
+
+	if ((INT32)i32TotalDamage <= 0)
+	{
+		i32TotalDamage = 1;
+	}
+
+	return i32TotalDamage;
+}
+
+INT32 CMath::AttackTarget_Damage_PCCLONE(CUnit* pUnit, CUnit* pTarget, BOOL& bCriticalout)
+{
+	auto pPC = dynamic_cast<CUnitPC*> (pUnit);
+	auto pTargetPC = dynamic_cast<CUnitClone*> (pTarget);
+
+	if (pPC == NULL || pTargetPC == NULL)
+	{
+		return 0;
+	}
+
+	DOUBLE i32FirstDamage = 0;		// 1차 대미지(기본 대미지)
+	DOUBLE i32SecondDamage = 0;		// 2차 대미지(대미지 증가)
+	DOUBLE i32ThirdDamage = 0;		// 3차 대미지(일격 필살 대미지)
+	DOUBLE i32TotalDamage = 0;		// 최종 대미지
+	DOUBLE i32AddDamage = 0;			//추가 대미지
+	
+
+	// 1차 대미지계산 : 기본 대미지
+	DOUBLE i32Att = pPC->GetComputedPower(pPC->GetAttackType());				// 공격 타입에 따라 가져온 공격력
+	DOUBLE i32Def = pTargetPC->GetComputedDef(pPC->GetAttackType());			// 공격자의 타입에 따라 가져온 타겟의 방어력
+	DOUBLE i32DefIgnore = pPC->GetComputedDefIgnore(pPC->GetAttackType());	// 공격자의 타입에 따라 가져온 방어력 무시
+
+	// 1차 대미지계산 : 기본 대미지
+	// (공격력 * ( 1 - ( 방어력 - 방어력 무시) / (방어력 + 방어상수500))) * (0.95~1.05)
+	// 만약 방어력 - 방어력무시가 0 이나오면 분자가 0 이므로 공격력 * 랜덤값만 적용
+	DOUBLE i32FirstDamageRandom = g_GameManager.getRandomNumber(95, 105) * 0.01;
+	if (i32Def - i32DefIgnore <= 0)
+	{
+		i32FirstDamage = i32Att * i32FirstDamageRandom;
+	}
+	else
+	{
+		i32FirstDamage = (i32Att * (1 - (i32Def - i32DefIgnore) / (i32Def + 500))) * i32FirstDamageRandom;
+	}
+
+
+	// 2차 대미지 계산  : 대미지 증가 계산
+	// 대미지 증가 수치 : 공격자 대미지 증가 - 방어자 대미지 증가 무시
+	DOUBLE i32IncreaseDamage = pPC->GetComputedIncreaseDamage(pPC->GetAttackType()) - pTargetPC->GetComputedIncreaseDamageIgnore(pPC->GetAttackType());
+	if (i32IncreaseDamage <= 0)
+	{
+		// 대미지 증가 수치가 <= 0 이면 기본 대미지
+		i32SecondDamage = i32FirstDamage;
+	}
+	else
+	{
+		// 기본 대미지 * ( 1+ 대미지 증가 수치 * 랜덤값 0.01~0.05)
+		i32SecondDamage = i32FirstDamage * (1 + i32IncreaseDamage * 0.01);
+	}
+
+	// 3차 대미지 계산 : 일격 필살
+	// 일격 필살 발동 확률 계산 => 일격 필살 확률 >= 랜덤값 (1 ~ 100);
+	bCriticalout = FALSE;
+	INT32 i32CriticalRandom = g_GameManager.getRandomNumber(0, 100);
+	DOUBLE i32ThirdDamageRandom = g_GameManager.getRandomNumber(1, 5) * 0.01f;
+	if (i32CriticalRandom <= pPC->m_BalanceInfo._i32PartsArray[BALANCE_POWER_PARTS32::BALANCE_POWER_PARTS32_Critical_Percent])
+	{
+		bCriticalout = TRUE;
+	}
+
+	if (bCriticalout == TRUE)
+	{
+		// 일격 필살 대미지 증가 수치 : 공격자 일격 필살 대미지 증가 - 방어자 일격 필살 대미지 증가 무시
+		DOUBLE i32IncreaseCritical = pPC->GetComputedIncreaseCritical() - pTargetPC->GetComputedIncreaseCriticalIgnore();
+
+		if (i32IncreaseCritical <= 0)
+		{
+			// 대미지 증가 수치가 <= 0 이면 2차 대미지
+			i32ThirdDamage = i32SecondDamage;
+		}
+		else
+		{
+			// 대미지 증가 수치가 > 0 이면  (2차 대미지) *(1.25 + (대미지 증가 수치 * 0.001) + 랜덤값(0.01~0.05))
+			i32ThirdDamage = i32SecondDamage * (1.25 + (i32IncreaseCritical * 0.001) + i32ThirdDamageRandom);
+		}
+	}
+	else
+	{
+		// 일격 필살 미 발동 시 대미지 : 2차 대미지
+		i32ThirdDamage = i32SecondDamage;
+	}
+
+	// 최종 대미지 계산 PVP, PVE 공격력 증가, 방어력 증가 이용
+	// 최종 대미지 : 3차 대미지 * ( 1 + (PVP 공격력 - PVP 방어력) * 0.01)
+	INT32 i32PvPAttack = pPC->GetComputedPvpPower(); // PVP 공격력
+	INT32 i32PvPDefense = pTargetPC->GetComputedPvpDef(); // PVP 방어력
+	i32TotalDamage = i32ThirdDamage + (i32PvPAttack - i32PvPDefense);
+
+	// 추가 대미지 증가 수치 : 공격자 추가 대미지 증가 - 방어자 추가 대미지 증가 무시
+	i32AddDamage = pPC->GetComputedAddPowerIncrease(pPC->GetAttackType()) - pTargetPC->GetComputedAddPowerIncreaseIgnore(pPC->GetAttackType());
+	if (i32AddDamage > 0)
+	{
+		// 추가 대미지 증가 수치가 > 0 이면 최종 대미지 *  ( 1 + 추가 대미지 증가 수치 * 0.01)
+		// 아니면 그냥 최종 대미지
+		i32TotalDamage = i32TotalDamage * (1 + i32AddDamage * 0.01);
+	}
+
+	if ((INT32)i32TotalDamage <= 0)
+	{
+		i32TotalDamage = 1;
+	}
+
+	return i32TotalDamage;
+}
+
 ```
+</details>
+
+<details>
+<summary>수정 코드</summary>
+
+```ruby
+// ===============================================================================
+// AttackTarget_1003B2M의 개선된 대체 함수
+// 유지보수성과 가독성을 향상시킨 버전
+// MAX_COUNT_DAMAGE(5)와 클라이언트 패킷 호환성을 완전히 유지
+// ===============================================================================
+
+/// <summary>
+/// AttackTarget_1003B2M의 개선된 대체 함수
+/// 기존 함수의 모든 로직을 유지하면서 유지보수성을 대폭 개선
+/// MAX_COUNT_DAMAGE(5) 및 클라이언트 패킷 구조 완전 호환
+/// </summary>
+/// <param name="pUnit">공격하는 유닛</param>
+/// <param name="pTarget">공격받는 유닛</param>
+void CMath::AttackTarget_Enhanced_V2(CUnit* pUnit, CUnit* pTarget)
+{
+	// 1단계: 컨텍스트 초기화
+	AttackContext ctx;
+	ctx.Initialize(pUnit, pTarget);
+	
+	if (!ctx.ValidateInput())
+		return;
+	
+	// 2단계: 패킷 구조체 초기화 (클라이언트 호환성 보장)
+	ctx.InitializePackets();
+	
+	// 3단계: 공격 유효성 검사 (거리, 타겟 상태 등)
+	if (!ValidateAttackRequest(ctx))
+		return;
+	
+	// 4단계: 공격 타입 및 애니메이션 설정
+	if (ctx.pPC)
+	{
+		// 공격 타입 설정 (기존 로직 유지)
+		for (int i = 0; i < MAX_COUNT_DAMAGE; i++)
+		{
+			INT32 i32AttackAnimation = ctx.pPC->GetAttAnimationIndex(FALSE);
+
+
+			ctx.basicMsg._i32AttackType[i] = i32AttackAnimation;
+			ctx.extraMsg._i32AttackType[i] = i32AttackAnimation;
+			ctx.passiveExtraMsg._i32AttackType[i] = i32AttackAnimation;
+			
+		}
+		
+
+	}
+	
+	INT32 i32MaxDamageCount = 1;
+	// 5단계: 공격 횟수 결정 (MAX_COUNT_DAMAGE 기반)
+	if (ctx.pPC)
+	{
+		ctx.attackCount =  ((ctx.pPC->GetAttackSpeed()-1)/MAX_ATTACK_COUNT_SPEED)+1 ; // 공속에 따른 추가타
+		ctx.extraPassive = CheckPassiveExtra(ctx.pPC);
+		i32MaxDamageCount = GetAddAttackCount(ctx.pPC)+1; //추가 데미지 수
+		
+		// MAX_COUNT_DAMAGE(4) 제한 적용
+		if (ctx.attackCount > MAX_ATTACK_COUNT)
+		{
+			ctx.attackCount = MAX_ATTACK_COUNT;
+		}
+
+		if (i32MaxDamageCount > MAX_COUNT_DAMAGE)
+		{
+			i32MaxDamageCount = MAX_COUNT_DAMAGE;
+		}
+	}
+	
+	// 6단계: 다중 공격 처리 (공격속도에 따른 패킷당 공격 횟수)
+	for (int attackIndex = 0; attackIndex < ctx.attackCount; attackIndex++)
+	{
+		if (!ProcessHitCheck(ctx, attackIndex))
+			continue; // 미스 발생 시 다음 공격으로
+			
+		// 7단계: 데미지 계산 및 적용
+		CalculateMultiHitDamage(ctx, attackIndex, i32MaxDamageCount);
+		
+		// 8단계: 특수 효과 적용 (버프, 디버프 등)
+		ApplySpecialEffects(ctx, attackIndex);
+	}
+	
+	// 8.5단계: PvP 고급 PK 시스템 처리 - kill_unit
+	/*if (ctx.pPC && ctx.pTargetPC)
+	{
+		ProcessAdvancedPKSystem(ctx);
+	}*/
+	
+	// 8.6단계: 버프 및 아이템 옵션 처리
+	ProcessBuffAndItemOptions(ctx);
+	
+	
+	// 9단계: 결과 전송 및 후처리
+	SendAttackResults(ctx);
+	
+	// 10단계: 타겟 사망 처리
+	ProcessTargetDeath(ctx);
+	
+	// 11단계: 정리 작업
+	CleanupAttack(ctx);
+}
+
+/// <summary>
+/// 공격 요청 유효성 검사 (거리, 상태, 맵 등)
+/// </summary>
+BOOL CMath::ValidateAttackRequest(AttackContext& ctx)
+{
+	if (!ctx.pCurrentMap)
+		return FALSE;
+	
+	// 거리 체크 (기존 로직 유지)
+	if (!CheckAttackRange(ctx))
+		return FALSE;
+	
+	if (ctx.pPC && ctx.pPC->GetWeightPercent() >= USABLE_WEIGHT_PERCENT)
+	{
+		return FALSE;
+	}
+
+
+	// 타겟 상태 체크
+	if (ctx.pTargetNPC && ctx.pTargetNPC->GetNPC_CSVData()->Type == NPC)
+	{
+		if (ctx.pPC)
+		{
+			for (INT32 i32 = 0; i32 < MAX_COUNT_DAMAGE; i32++)
+			{
+				ctx.basicMsg._result[i32] = ENUM_ALL_ERROR_ATTACK_TOWN_NPC;
+			}
+			ctx.pPC->Write((BYTE*)&ctx.basicMsg, sizeof(SP_Attack), 0);
+		}
+		return FALSE;
+	}
+	
+	return TRUE;
+}
+
+/// <summary>
+/// 공격 거리 유효성 검사
+/// </summary>
+BOOL CMath::CheckAttackRange(AttackContext& ctx)
+{
+	if (!ctx.pPC)
+		return TRUE; // NPC나 클론은 거리 체크 생략
+		
+	if (ctx.pPC->GetAccountType() == ACCTYPE_DUMMY)
+		return TRUE; // 더미는 거리 체크 해제
+	
+	INT32 range = AttackRange(ctx.pPC->GetJobCode());
+	BOOL inRange = FALSE;
+	
+	// PvP 거리 체크
+	if (ctx.pTargetPC)
+	{
+		inRange = g_MapManager.IsRange(range, ctx.pAttacker->m_X, ctx.pAttacker->m_Y, 
+									 ctx.pTarget->m_X, ctx.pTarget->m_Y);
+	}
+	// PvE 거리 체크 
+	else if (ctx.pTargetNPC)
+	{
+		INT32 totalRange = range + ctx.pTargetNPC->GetNPC_CSVData()->TileSize/* + 
+						  ctx.pTargetNPC->GetNPC_CSVData()->_i32HitSize*/;
+		inRange = g_MapManager.IsRange(totalRange, ctx.pAttacker->m_X, ctx.pAttacker->m_Y,
+									  ctx.pTarget->m_X, ctx.pTarget->m_Y);
+	}
+	
+	if (!inRange)
+	{
+		for (INT32 i32 = 0; i32 < MAX_ATTACK_COUNT; i32++)
+		{
+			ctx.basicMsg._result[i32] = ENUM_ALL_ERROR_ATTACK_NOT_RANGE;
+		}
+		if (ctx.pTargetNPC)
+		{
+			ctx.basicMsg._HpPercent = ctx.pTargetNPC->GetHpPercent() ;
+		}
+		ctx.pPC->Write((BYTE*)&ctx.basicMsg, sizeof(SP_Attack), 0);
+		return FALSE;
+	}
+	
+	return TRUE;
+}
+
+/// <summary>
+/// 명중 판정 처리 (공격 인덱스별)
+/// </summary>
+BOOL CMath::ProcessHitCheck(AttackContext& ctx, INT32 attackIndex)
+{
+	BOOL hitResult = !MissCheck(ctx.pAttacker, ctx.pTarget,false);
+	
+	if (!hitResult)
+	{
+		// 미스 처리 (기존 로직 유지)
+		memset(ctx.basicMsg._ui32Damage[attackIndex], 0x00, sizeof(ctx.basicMsg._ui32Damage[attackIndex]));
+		ctx.basicMsg._result[attackIndex] = ENUM_ALL_ERROR_ATAACK_MISS;
+		ctx.basicMsg._ui32ExtraDamage[attackIndex] = 0;
+		
+		// 미스도 어그로 처리 (PvE에서)
+		if (ctx.pTargetNPC && ctx.pTargetNPC->GetNPC_CSVData()->Type != NPC)
+		{
+			if (ctx.pTargetNPC->GetDamage_Unit()->dwUnitUnique <= 0)
+			{
+				ctx.pTargetNPC->SetDamageUnit(ctx.pPC->GetPoolArray(), 
+											 ctx.pPC->GetFieldUnique(), 
+											 ctx.pPC->m_X, ctx.pPC->m_Y);
+			}
+			
+			// 합공 몬스터 어그로 처리
+			if (ctx.pCurrentMap)
+				ctx.pCurrentMap->m_BlockManager.SetJoinAttackDamageUnit(ctx.pPC, MAX_JOIN_ATTACK_SCOPE);
+		}
+
+		//공격자가 유저 , 타겟이 NPC일 때 -> 숙련도 상승
+		if (ctx.pPC && ctx.pTargetNPC)
+		{
+			if (ctx.pPC->GetEquipWeapon() != NULL) //무기가 없을시 숙련도 상승 x
+			{
+				ctx.pPC->AddStatExp(ENUM_USER_STAT_TYPE::JOBLEVEL, ctx.pTargetNPC->GetNPC_CSVData()->_i32TrainingBonus);
+			}
+		}
+		//공격자가 NPC , 타겟이 PC일 때 -> 민첩 상승
+		else if (ctx.pNPC && ctx.pTargetPC)
+		{
+			ctx.pTargetPC->AddStatExp(ENUM_USER_STAT_TYPE::DEX, ctx.pNPC->GetNPC_CSVData()->_i32TrainingBonus);
+		}
+
+		
+		return FALSE;
+	}
+	
+	return TRUE;
+}
+
+/// <summary>
+/// 다중 공격 데미지 계산 (MAX_COUNT_DAMAGE 배열 활용)
+/// </summary>
+void CMath::CalculateMultiHitDamage(AttackContext& ctx, INT32 attackIndex, INT32 i32MaxDamage)
+{
+	if (ctx.pTarget->GetCurrentHP() < 0)
+	{
+		return;
+	}
+
+
+	BOOL bCritical = FALSE;
+	BOOL bExtraCritical = FALSE;
+	
+	// 기본 데미지 계산 (기존 데미지 계산 함수 활용)
+	UINT32 basicDamage[MAX_COUNT_DAMAGE] = { 0, };
+	
+	// 유닛 타입별 데미지 계산 (기존 로직 유지)
+	for (INT32 i32 = 0; i32 < i32MaxDamage; i32++)
+	{
+		basicDamage[i32] = AttackTarget_Damage(ctx.pAttacker, ctx.pTarget, bCritical);
+	}
+	
+	// 특수 데미지 계산 (기존 로직 유지)
+	INT32 specialDamage = 0;
+	if (ctx.pPC)
+	{
+		specialDamage = GetAttackExtraDamage_1003B2M(ctx.pPC, ctx.pTarget, basicDamage[0], ctx.successSpecialCount);
+	}
+	
+	// 패시브 추가타 데미지 계산
+	INT32 extraDamage = 0;
+	INT32 extraSpecialDamage = 0;
+	if (ctx.extraPassive)
+	{
+
+		extraDamage = AttackTarget_Damage(ctx.pAttacker, ctx.pTarget, bExtraCritical);
+
+		
+		if (ctx.pPC)
+		{
+			extraSpecialDamage = GetAttackExtraDamage_1003B2M(ctx.pPC, ctx.pTarget, extraDamage, ctx.successSpecialExtraCount);
+		}
+	}
+	
+	// 패킷 배열에 데미지 저장 (MAX_COUNT_DAMAGE 인덱스 사용)
+	memcpy(ctx.basicMsg._ui32Damage[attackIndex],basicDamage,sizeof(ctx.basicMsg._ui32Damage[attackIndex]));
+	ctx.basicMsg._ui32ExtraDamage[attackIndex] = extraDamage;
+	ctx.extraMsg._ui32Damage[attackIndex] = specialDamage;
+	ctx.passiveExtraMsg._ui32Damage[attackIndex] = extraSpecialDamage;
+	
+	// 크리티컬 플래그 설정 (비트마스크 사용)
+	ctx.basicMsg.i32Critical |= (bCritical << attackIndex);
+	ctx.basicMsg.i32ExtraCritical |= (bExtraCritical << attackIndex);
+	ctx.extraMsg.i32Critical |= (bCritical << attackIndex);
+	ctx.passiveExtraMsg.i32Critical |= (bExtraCritical << attackIndex);
+	
+	INT64 i64TotalbasicDamage = 0;
+	for (INT32 i32 = 0; i32 < MAX_COUNT_DAMAGE; i32++)
+	{
+		i64TotalbasicDamage += basicDamage[i32];
+	}
+
+	// 총 데미지로 타겟 HP 감소
+	INT64 totalDamage = i64TotalbasicDamage + specialDamage + extraDamage + extraSpecialDamage;
+	if (totalDamage > 0)
+	{
+		ctx.pTarget->AddHP(-totalDamage);
+
+		// 최대 데미지 로깅 (PvE)
+		if (ctx.pPC && ctx.pTarget->GetUnitTYPE() == eUnitType::NPC)
+		{
+			ctx.pPC->CheckMaxDamageLog(ctx.pTarget, totalDamage);
+		}
+		
+		// PvE 경험치 처리 (몬스터 공격 시)
+		if (ctx.pPC || ctx.pTargetPC)
+		{
+			ProcessExperienceGain(ctx, attackIndex, totalDamage);
+		}
+		
+		// Hunt Event 처리 (기존 로직 유지)
+		if (ctx.pPC && ctx.pTargetNPC && ctx.pTargetNPC->GetNPC_CSVData()->Type != NPC)
+		{
+			ctx.pTargetNPC->InsertHuntEventList(ctx.pPC, totalDamage);
+		}
+
+	}
+	
+	ctx.successAttackCount++;
+}
+
+/// <summary>
+/// 특수 효과 적용 (버프, 디버프, 경직 등)
+/// </summary>
+void CMath::ApplySpecialEffects(AttackContext& ctx, INT32 attackIndex)
+{
+	// 혼불 소모 처리
+	if (ctx.pPC)
+	{
+		ctx.pPC->_SoulfireList.UserSoulFire(ctx.pPC, ENUM_SOULFIRE_TYPE::NOMAL_ATTACK);
+		
+		// 패시브 추가타 시 추가 혼불 소모
+		if (ctx.extraPassive)
+		{
+			ctx.pPC->_SoulfireList.UserSoulFire(ctx.pPC, ENUM_SOULFIRE_TYPE::NOMAL_ATTACK);
+		}
+	}
+	
+	// 반사 버프 처리 (PvP)
+	//if (ctx.pTargetPC)
+	//{
+	//	stBuffData* reflectBuff = ctx.pTargetPC->GetReflectSkillData();
+	//	if (reflectBuff)
+	//	{
+	//		g_BuffManager.AddBuff(reflectBuff, ctx.pTargetPC, ctx.pPC);
+	//	}
+	//}
+	
+	// 경직 처리
+	if (ctx.pTarget->GetCurrentHP() > 0)
+	{
+		//if (StiffnssCheck(ctx.pAttacker, ctx.pTarget))
+		//{
+		//	if (ctx.pTargetPC && ctx.pTargetPC->GetStiffnessTime() <= 0)
+		//	{
+		//		ctx.pTargetPC->SetStiffnessTime();
+		//		SP_STIFFNESS stiffnessMsg;
+		//		stiffnessMsg._dwTargetFieldUnique = ctx.pTargetPC->GetFieldUnique();
+		//		stiffnessMsg._dwFieldUnique = ctx.pAttacker->GetFieldUnique();
+		//		if (ctx.pCurrentMap)
+		//			ctx.pCurrentMap->m_BlockManager.BroadCast(ctx.pTarget, (BYTE*)&stiffnessMsg, sizeof(SP_STIFFNESS));
+		//	}
+		//	else if (ctx.pTargetNPC)
+		//	{
+		//		ctx.pTargetNPC->SetStiffnessTime();
+		//	}
+		//}
+	}
+	
+	// PK 쿨타임 처리 (PvP)
+	if (ctx.pPC && ctx.pTargetPC)
+	{
+		if (ctx.pPC->GetPKCoolTime() <= 0)
+		{
+			switch (ctx.pPC->GetMapType())
+			{
+				case ENUM_PVP_MAP_TYPE::ENUM_PVP_MAP_TYPE_SAFE:
+					ctx.pPC->SetPKCoolTime(DEFINECSV("SAFE_PVP_MAP_COOL"));
+					break;
+				case ENUM_PVP_MAP_TYPE::ENUM_PVP_MAP_TYPE_NORMAL:
+					ctx.pPC->SetPKCoolTime(DEFINECSV("NORMAL_PVP_MAP_COOL"));
+					break;
+				case ENUM_PVP_MAP_TYPE::ENUM_PVP_MAP_TYPE_DANGER:
+					ctx.pPC->SetPKCoolTime(DANGER_PVP_MAP_COOL);
+					ctx.pTargetPC->SetPKCoolTime(DANGER_PVP_MAP_COOL);
+					break;
+				case ENUM_PVP_MAP_TYPE::ENUM_PVP_MAP_TYPE_DISPUTE:
+					ctx.pPC->SetPKCoolTime(DISPUTE_PVP_MAP_COOL);
+					break;
+				default:
+					ctx.pPC->SetPKCoolTime(0);
+					break;
+			}
+		}
+	}
+}
+
+/// <summary>
+/// 공격 결과 패킷 전송 (클라이언트 호환성 완전 보장)
+/// </summary>
+void CMath::SendAttackResults(AttackContext& ctx)
+{
+
+	// 공격 카운트 정보 설정 (기존 패킷 구조 유지)
+	ctx.basicMsg._i32AttackCount =  ctx.successAttackCount;
+	ctx.extraMsg._i32AttackCount =  ctx.successAttackCount;
+	
+	// HP 퍼센트 설정
+	INT32 targetHpPercent = 0;
+	if (ctx.pTargetPC)
+		targetHpPercent = ctx.pTargetPC->GetHpPercent();
+	else if (ctx.pTargetNPC)
+		targetHpPercent = ctx.pTargetNPC->GetHpPercent();
+	
+
+	// 여기까지 들어오면 일단 공격에는 성공한 패킷임.
+	if (ctx.successAttackCount > 0)
+	{
+		for (INT32 i32 = 0; i32 < MAX_ATTACK_COUNT; i32++)
+		{
+			if (ctx.basicMsg._result[i32] != ENUM_ALL_ERROR_ATAACK_MISS)
+			{
+				ctx.basicMsg._result[i32] = SUCCESS;
+			}
+		}
+		ctx.basicMsg._HpPercent =targetHpPercent ;
+	}
+	else
+	{
+		for (INT32 i32 = 0; i32 < MAX_ATTACK_COUNT; i32++)
+		{
+			if (ctx.basicMsg._result[i32] != ENUM_ALL_ERROR_ATAACK_MISS)
+			{
+				ctx.basicMsg._result[i32] = SUCCESS;
+			}
+		}
+		ctx.basicMsg._HpPercent = targetHpPercent;
+	}
+	
+	// 패킷 전송 (기존 순서와 구조 완전 유지)
+	//if (ctx.pPC != NULL)
+	//{
+	//	ctx.pPC->Write((BYTE*)&ctx.basicMsg, sizeof(SP_Attack));
+	//}
+	
+	// 특수 데미지가 있을 때만 추가 패킷 전송
+	INT32 totalExtraDamage = 0;
+	for (int i = 0; i < MAX_COUNT_DAMAGE; i++)
+	{
+		totalExtraDamage += ctx.extraMsg._ui32Damage[i];
+		totalExtraDamage += ctx.passiveExtraMsg._ui32Damage[i];
+	}
+	
+	if (totalExtraDamage > 0)
+	{
+		if (ctx.pPC != NULL)
+		{
+			ctx.pPC->Write((BYTE*)&ctx.extraMsg, sizeof(SP_Attack_Extra));
+			if (ctx.extraPassive)
+				ctx.pPC->Write((BYTE*)&ctx.passiveExtraMsg, sizeof(SP_Attack_Extra));
+		}
+	}
+	
+	// 브로드캐스트 (주변 플레이어들에게 공격 정보 전송)
+	if (ctx.pCurrentMap)
+	{
+		ctx.pCurrentMap->m_BlockManager.Attack_to_BroadCast(ctx.pAttacker, ctx.pTarget, &ctx.basicMsg);
+	}
+}
+
+/// <summary>
+/// 타겟 사망 처리 및 경험치/아이템 드랍
+/// </summary>
+void CMath::ProcessTargetDeath(AttackContext& ctx)
+{
+	if (ctx.pTarget->GetCurrentHP() <= 0)
+	{
+		//Pc가 Unit을 죽임
+		if (ctx.pPC && ctx.pTarget)
+		{
+			Kill_Unit(ctx.pPC, ctx.pTarget, ctx.pCurrentMap, (INT32)ENUM_ATTACK_TYPE::ENUM_ATTACK_TYPE_ATTACK, 0, 0);
+		}
+		//NPC가 Unit을 죽임
+		else if (ctx.pNPC && ctx.pTarget)
+		{
+			Kill_Unit(ctx.pNPC, ctx.pTarget, ctx.pCurrentMap, (INT32)ENUM_ATTACK_TYPE::ENUM_ATTACK_TYPE_ATTACK, 0, 0);
+		}
+		//Clone가 Unit을 죽임
+		else if (ctx.pClone && ctx.pTarget)
+		{
+			Kill_Unit(ctx.pClone, ctx.pTarget, ctx.pCurrentMap, (INT32)ENUM_ATTACK_TYPE::ENUM_ATTACK_TYPE_ATTACK, 0, 0);
+		}
+
+	}
+}
+
+/// <summary>
+/// 공격 후 정리 작업 (메모리 해제, 상태 리셋 등)
+/// </summary>
+void CMath::CleanupAttack(AttackContext& ctx)
+{
+	// 공격 후 상태 업데이트
+	if (ctx.pPC)
+	{
+		ctx.pPC->ResetConExpTick(); // 연속 경험치 틱 리셋
+		
+		// 마지막 공격 대상 정보 저장
+		if (ctx.pTargetNPC)
+		{
+			ctx.pPC->SetLastTargetNpcField(ctx.pTargetNPC->GetFieldUnique());
+		}
+	}
+	
+	// 어그로 관련 후처리
+	if (ctx.pTargetNPC && ctx.pTargetNPC->GetAlive() ==TRUE && ctx.pPC)
+	{
+		if (ctx.pTargetNPC->GetDamage_Unit()->dwUnitUnique <= 0)
+		{
+			ctx.pTargetNPC->SetDamageUnit(ctx.pPC->GetPoolArray(), 
+										 ctx.pPC->GetFieldUnique(),
+										 ctx.pPC->m_X, ctx.pPC->m_Y);
+		}
+	}
+}
+
+/// <summary>
+/// PvE 경험치 획득 처리 (기존 로직 완전 재현)
+/// </summary>
+void CMath::ProcessExperienceGain(AttackContext& ctx, INT32 attackIndex, INT32 totalDamage)
+{
+	// 25.10.16_몬스터를 공격할 때마다 경험치를 올려주는 처리인데 사용안해서 주석해둠 필요시 주석 제거 후 사용
+
+	//공격자가 NPC , 타겟이 유저 일 때 -> 맷집 상승
+	if (ctx.pNPC && ctx.pTargetPC)
+	{
+		ctx.pTargetPC->AddStatExp(ENUM_USER_STAT_TYPE::CON, ctx.pNPC->GetNPC_CSVData()->_i32TrainingBonus);
+	}
+	//공격자가 유저 , 타겟이 NPC일 때 -> 힘 상승
+	else if (ctx.pPC && ctx.pTargetNPC)
+	{
+		ctx.pPC->AddStatExp(ENUM_USER_STAT_TYPE::STR, ctx.pTargetNPC->GetNPC_CSVData()->_i32TrainingBonus);
+	}
+
+
+	//if (!ctx.pPC || !ctx.pTargetNPC)
+	//	return;
+	//	
+	//// 경험치 계산 (기존 로직 유지)
+	//int exp = ctx.pTargetNPC->GetNpcAttackExp(totalDamage);
+	//int myLevel = ctx.pPC->GetLevel();
+	//int levelDiff = myLevel - ctx.pTargetNPC->GetLevel();
+	//
+	//// 레벨 차이에 따른 경험치 조정 (기존 로직 유지)
+	//if (/*ctx.pTargetNPC->GetNPC_CSVData()->_i32LimitLevel == 0 && */levelDiff > 0)
+	//{
+	//	if (levelDiff < MAX_XP_LEVEL_GAP) // 1~199 레벨차
+	//	{
+	//		exp -= exp * levelDiff * 0.005;
+	//		ctx.pPC->AddExp(exp, ctx.pTargetNPC->GetFieldUnique());
+	//	}
+	//	// 200 이상 레벨차는 경험치 없음
+	//}
+	//else
+	//{
+	//	// 케릭 레벨이 몬스터 레벨보다 낮거나 같으면
+	//	ctx.pPC->AddExp(exp, ctx.pTargetNPC->GetFieldUnique());
+	//}
+}
+
+void CMath::ProcessAdvancedPKSystem(AttackContext& ctx)
+{
+	// PK 시스템은 PC 대 PC 전투에서만 처리
+	if (!ctx.pPC || !ctx.pTargetPC)
+		return;
+
+	// PK 모드 체크
+	BOOL attackerPKMode = ctx.pPC->CheckPKMode();
+	BOOL targetPKMode = ctx.pTargetPC->CheckPKMode();
+
+	// 정당방위 시스템 처리
+	if (attackerPKMode && !targetPKMode)
+	{
+		// 공격자가 PK 모드이고 피격자가 PK 모드가 아닌 경우
+		// 피격자의 정당방위 리스트에 공격자 추가
+		ctx.pTargetPC->AddSelfDefense(ctx.pPC);
+	}
+
+	// PK 등급 업데이트 (타겟이 죽었을 때만)
+	if (ctx.pTargetPC->GetCurrentHP() <= 0)
+	{
+		// 살생부에 기록
+		ctx.pPC->GetPkList()->SetAttacker(ctx.pTargetPC, ctx.basicMsg._ui32Damage[0][0]);
+
+		// PK 기록 저장
+		ctx.pPC->RecordPkData(ctx.pTargetPC);
+
+		// PK 등급 업데이트
+		ctx.pPC->UpdatePKGrade(ctx.pTargetPC);
+
+		// PK 킬 카운트 증가
+		ctx.pPC->AddPKKill();
+
+		// 타겟의 데스 처리
+		ctx.pTargetPC->AddPKDeath();
+
+		//ctx.pTargetPC->GetPkList()->SetTarget(ctx.pPC, ctx.basicMsg._ui32Damage[0][0]);
+	}
+}
+
+void CMath::ProcessBuffAndItemOptions(AttackContext& ctx)
+{
+	if (!ctx.pAttacker)
+		return;
+
+	for (INT32 i32 = 0; i32 < MAX_ATTACK_COUNT; i32++)
+	{
+		INT64 i64Damage = 0;
+		for (INT32 j = 0; j < MAX_COUNT_DAMAGE; j++)
+		{
+			i64Damage += ctx.basicMsg._ui32Damage[i32][j];
+
+		}
+
+		//공격 후 데미지입히면 어태커가 받는 효과 
+		if (g_BuffManager.SpeciailAttackBuffCheck(ctx.pAttacker) == TRUE)
+		{
+			g_BuffManager.NormalAttackSpecialEffect(ctx.pAttacker, ctx.pTarget, i64Damage); //평타 공격시 발동하는 버프들효과 적용
+		}
+
+		//반사는 살아있어야만 가능
+		g_BuffManager.CounterBuffEffect(ctx.pAttacker, ctx.pTarget, i64Damage);
+	}
+
+	// 버프 시스템 처리
+	if (ctx.pPC)
+	{
+		// 공격 시 버프 효과 적용
+		// - 공격력 증가 버프
+		// - 치명타 확률 증가 버프
+		// - 스킬 데미지 증가 버프 등
+
+		// 버프 지속시간 감소 (일부 버프는 공격 시 소모됨)
+		ctx.pPC->BuffAbilityUpdate(false);
+	}
+
+	if (ctx.pTarget)
+	{
+		// 타겟에게 디버프 적용 가능성 체크
+		// - 독 효과
+		// - 기절 효과  
+		// - 둔화 효과 등
+
+		ctx.pTarget->BuffAbilityUpdate(false);
+	}
+}
+
+```
+</details>
