@@ -3542,6 +3542,7 @@ void CMath::ProcessBuffAndItemOptions(AttackContext& ctx)
 
 ```
 </details>
+
 개선점
 1. 데미지 계산공식은 밸런스 구조체가 있는 CUnit의 함수에서 계산하게 만듬
 2. 구간별로 명확하게 파트를 명확히 나누어 정의
