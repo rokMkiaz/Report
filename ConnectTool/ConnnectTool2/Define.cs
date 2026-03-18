@@ -10,7 +10,7 @@ namespace ConnnectTool2
     {
         public string Name { get; set; }
         public string SubName { get; set; }
-        public List<Connection> Connections { get; } = new List<Connection>();
+        public List<Connection> Connections { get; set; } = new List<Connection>();
     }
 
     class Connection
