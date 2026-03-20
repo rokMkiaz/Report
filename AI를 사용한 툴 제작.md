@@ -806,3 +806,722 @@ exit /b
 ```
 
 </details>
+
+
+### 4. Unit 추적 툴
+게임서버 Unit들을 추적하고 해당 객체가 하는 행동을 추적하기 위한 툴. imgui를 활용하여 만들었다.
+<img width="640" height="382" alt="image" src="https://github.com/user-attachments/assets/4c118645-7903-41ab-8dcd-917a44219389" />
+
+<img width="640" height="382" alt="image" src="https://github.com/user-attachments/assets/65c96be9-f7eb-4c10-8712-9b489946e2ac" />
+
+<details>
+<summary>코드/펼치기</summary>
+	
+```ruby
+#pragma once
+#include "Singleton.h"
+#include <WinSock2.h> // 반드시 포함! (winsock 라이브러리 1순위 충돌방지를 위해 먼저 포함 필요)
+#include "imgui.h"
+#include "imgui_internal.h"
+#include "backends/imgui_impl_win32.h"
+#include "backends/imgui_impl_dx11.h"
+#include <d3d11.h>
+#include <tchar.h>
+#include <vector>
+#include <process.h>
+
+//======================================
+// 게임 서버 GUI 매니저
+// 용도: 맵 상태 시각화 / 서버 상태 모니터
+// - 자체 스레드를 소유하므로 main() 메시지루프에 영향 없음
+// - StartThread() / StopThread() 로만 제어
+//======================================
+
+class GuiManager : public CSingleton <GuiManager>
+{
+public:
+	GuiManager() {}
+	~GuiManager() {}
+
+	// ─── 외부 인터페이스 (main에서 이것만 호출) ───
+	void StartThread();     // GUI 스레드 시작
+	void StopThread();      // GUI 스레드 종료 요청 및 대기
+
+private:
+	// ─── 내부 스레드 진입점 ───
+	static UINT WINAPI  GuiThreadEntry(LPVOID pVoid);
+	void                RunGui();   // Initialize → SetupImGui → MainLoop → Cleanup
+
+	// 단계별 초기화/해제/루프 함수
+	BOOL    Initialize();       // 1. 윈도우 및 DirectX 초기화
+	void    SetupImGui();       // 2. ImGui 컨텍스트 및 폰트 초기화
+	void    MainLoop();         // 3. 전용 메시지 루프 및 프레임 렌더
+	void    RenderUI();         // 4. 탭별 UI 렌더링 (탭바, 창 등)
+
+	// 탭별 렌더링 함수
+	void    RenderTabMapInfo(); // 탭1: 맵 타일 시각화 및 유닛 위치 표시
+
+	void    RenderFrame();      // 5. DirectX로 최종 프레임 제출
+	void    Cleanup();          // 6. 자원 해제 및 정리
+
+	// OS에 의해 호출되는 WndProc 함수
+	static LRESULT WINAPI   WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
+	// 실제 메시지 처리의 멤버 함수
+	LRESULT                 RealWndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
+
+	BOOL CreateDeviceD3D(HWND hWnd);
+	void CleanupDeviceD3D();
+	void CreateRenderTarget();
+	void CleanupRenderTarget();
+
+private:
+	// ─── 스레드 제어 ───
+	HANDLE          _hThread    = nullptr;
+	volatile BOOL   _bStop      = FALSE;    // 외부에서 종료 요청 시 TRUE
+
+	// ─── DirectX 11 ───
+	HWND                        _hWnd                   = nullptr;
+	ID3D11Device*               _pd3dDevice             = nullptr;
+	ID3D11DeviceContext*        _pd3dDeviceContext       = nullptr;
+	IDXGISwapChain*             _pSwapChain             = nullptr;
+	BOOL                        _bSwapChainOccluded     = FALSE;
+	UINT                        _uiResizeWidth          = 0;
+	UINT                        _uiResizeHeight         = 0;
+	ID3D11RenderTargetView*     _pMainRenderTargetView  = nullptr;
+
+	// ─── 렌더 설정 ───
+	ImVec4  _vClearColor = ImVec4(0.15f, 0.15f, 0.15f, 1.00f);
+
+	// ─── 맵 시각화 상태 ───
+	INT32   _i32SelectedMapIndex    = 0;
+	float   _fMapZoom               = 2.0f;
+	ImVec2  _vMapOffset             = ImVec2(0.0f, 0.0f);  // 드래그 팬 오프셋
+
+	// ─── 선택 상태 ───
+	INT32   _i32SelectedDummyIndex  = -1;
+	DWORD   _dwSelectedCharUnique   = 0;    // 클릭 선택된 캐릭터 Unique
+
+	// ─── 테스트 관련 입력값 ───
+	INT32   _i32TestCount           = 1;
+	INT32   _i32TestStartID         = 101;
+	INT32   _i32TestGroupID         = 11;
+
+	// ─── 워프 입력값 ───
+	INT32   _i32WarpMapNum          = 0;
+	INT32   _i32WarpX               = 0;
+	INT32   _i32WarpY               = 0;
+};
+
+
+```
+
+```ruby
+//============================================================================================================
+// GNISOFT
+//------------------------------------------------------------------------------------------------------------
+// GuiManager - 더미 클라이언트 GUI (맵 정보 / 더미 제어)
+//============================================================================================================
+#include "StdAfx.h"
+#include "GuiManager.h"
+#include "DataManager.h"
+#include "MapManager.h"
+#include "GameManager.h"
+#include "ConsoleCommands.h"
+#include "UnitPC.h"
+#include "UnitNPC.h"
+#include <string>
+
+
+//============================================================================================================
+// Win32 / DirectX 헬퍼
+//============================================================================================================
+// Forward declare message handler from imgui_impl_win32.cpp
+extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
+
+LRESULT WINAPI GuiManager::WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
+{
+    return GuiManager::GetInstance()->RealWndProc(hWnd, msg, wParam, lParam);
+}
+
+LRESULT GuiManager::RealWndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam)
+{
+    if (ImGui_ImplWin32_WndProcHandler(hWnd, msg, wParam, lParam))
+        return true;
+
+    switch (msg)
+    {
+    case WM_SIZE:
+        if (wParam == SIZE_MINIMIZED) return 0;
+        _uiResizeWidth  = (UINT)LOWORD(lParam);
+        _uiResizeHeight = (UINT)HIWORD(lParam);
+        return 0;
+    case WM_SYSCOMMAND:
+        if ((wParam & 0xfff0) == SC_KEYMENU) return 0;
+        break;
+    case WM_DESTROY:
+        ::PostQuitMessage(0);
+        return 0;
+    }
+    return ::DefWindowProcA(hWnd, msg, wParam, lParam);
+}
+
+BOOL GuiManager::CreateDeviceD3D(HWND hWnd)
+{
+    DXGI_SWAP_CHAIN_DESC sd = {};
+    sd.BufferCount        = 2;
+    sd.BufferDesc.Format  = DXGI_FORMAT_R8G8B8A8_UNORM;
+    sd.Flags              = DXGI_SWAP_CHAIN_FLAG_ALLOW_MODE_SWITCH;
+    sd.BufferUsage        = DXGI_USAGE_RENDER_TARGET_OUTPUT;
+    sd.OutputWindow       = hWnd;
+    sd.SampleDesc.Count   = 1;
+    sd.Windowed           = TRUE;
+    sd.SwapEffect         = DXGI_SWAP_EFFECT_DISCARD;
+
+    const D3D_FEATURE_LEVEL featureLevelArray[2] = { D3D_FEATURE_LEVEL_11_0, D3D_FEATURE_LEVEL_10_0 };
+    D3D_FEATURE_LEVEL featureLevel;
+
+    HRESULT res = D3D11CreateDeviceAndSwapChain(
+        nullptr, D3D_DRIVER_TYPE_HARDWARE, nullptr, 0,
+        featureLevelArray, 2, D3D11_SDK_VERSION,
+        &sd, &_pSwapChain, &_pd3dDevice, &featureLevel, &_pd3dDeviceContext);
+
+    if (res == DXGI_ERROR_UNSUPPORTED)
+        res = D3D11CreateDeviceAndSwapChain(
+            nullptr, D3D_DRIVER_TYPE_WARP, nullptr, 0,
+            featureLevelArray, 2, D3D11_SDK_VERSION,
+            &sd, &_pSwapChain, &_pd3dDevice, &featureLevel, &_pd3dDeviceContext);
+
+    if (res != S_OK) return FALSE;
+
+    CreateRenderTarget();
+    return TRUE;
+}
+
+void GuiManager::CleanupDeviceD3D()
+{
+    CleanupRenderTarget();
+    if (_pSwapChain)        { _pSwapChain->Release();        _pSwapChain        = nullptr; }
+    if (_pd3dDeviceContext) { _pd3dDeviceContext->Release(); _pd3dDeviceContext = nullptr; }
+    if (_pd3dDevice)        { _pd3dDevice->Release();        _pd3dDevice        = nullptr; }
+}
+
+void GuiManager::CreateRenderTarget()
+{
+    ID3D11Texture2D* pBack = nullptr;
+    _pSwapChain->GetBuffer(0, IID_PPV_ARGS(&pBack));
+    if (pBack)
+    {
+        _pd3dDevice->CreateRenderTargetView(pBack, nullptr, &_pMainRenderTargetView);
+        pBack->Release();
+    }
+}
+
+void GuiManager::CleanupRenderTarget()
+{
+    if (_pMainRenderTargetView) { _pMainRenderTargetView->Release(); _pMainRenderTargetView = nullptr; }
+}
+
+//============================================================================================================
+// 초기화 / 메인 루프 / 정리
+//============================================================================================================
+
+
+//============================================================================================================
+// 스레드 관리
+//============================================================================================================
+
+void GuiManager::StartThread()
+{
+    _bStop = FALSE;
+    UINT dwId = 0;
+    _hThread = (HANDLE)_beginthreadex(nullptr, 0, GuiThreadEntry, this, 0, &dwId);
+    SetThreadPriority(_hThread, THREAD_PRIORITY_BELOW_NORMAL);
+}
+
+void GuiManager::StopThread()
+{
+    _bStop = TRUE;
+    if (_hWnd)
+        ::PostMessageA(_hWnd, WM_CLOSE, 0, 0);
+
+    if (_hThread)
+    {
+        ::WaitForSingleObject(_hThread, 5000);
+        ::CloseHandle(_hThread);
+        _hThread = nullptr;
+    }
+}
+
+UINT WINAPI GuiManager::GuiThreadEntry(LPVOID pVoid)
+{
+    reinterpret_cast<GuiManager*>(pVoid)->RunGui();
+    return 0;
+}
+
+BOOL GuiManager::Initialize()
+{
+    ImGui_ImplWin32_EnableDpiAwareness();
+
+    WNDCLASSEXA wc = { sizeof(wc), CS_CLASSDC, WndProc, 0L, 0L,
+        GetModuleHandleA(nullptr), nullptr, nullptr, nullptr, nullptr, "Game Server GUI", nullptr };
+    ::RegisterClassExA(&wc);
+
+    _hWnd = ::CreateWindowA(wc.lpszClassName, "Game Server GUI",
+        WS_OVERLAPPEDWINDOW, 100, 100, 1280, 800,
+        nullptr, nullptr, wc.hInstance, nullptr);
+
+    if (!CreateDeviceD3D(_hWnd))
+    {
+        CleanupDeviceD3D();
+        ::UnregisterClassA(wc.lpszClassName, wc.hInstance);
+        return FALSE;
+    }
+
+    ::ShowWindow(_hWnd, SW_SHOWDEFAULT);
+    ::UpdateWindow(_hWnd);
+    return TRUE;
+}
+
+void GuiManager::SetupImGui()
+{
+    IMGUI_CHECKVERSION();
+    ImGui::CreateContext();
+    ImGuiIO& io = ImGui::GetIO();
+    io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
+    ImGui::StyleColorsDark();
+
+    ImGui_ImplWin32_Init(_hWnd);
+    ImGui_ImplDX11_Init(_pd3dDevice, _pd3dDeviceContext);
+
+    // 한국어 폰트 로드
+    static const ImWchar ranges[] = {
+        0x0020, 0x00FF,  // Basic Latin + Latin Supplement
+        0x3131, 0x3163,  // 한글 자모
+        0xAC00, 0xD7A3,  // 한글 음절
+        0,
+    };
+    ImFontConfig cfg;
+    cfg.OversampleH = 1; cfg.OversampleV = 1; cfg.PixelSnapH = true;
+
+    const char* korFonts[] = {
+        "C:/Windows/Fonts/malgun.ttf",
+        "C:/Windows/Fonts/NanumGothic.ttf",
+    };
+    bool loaded = false;
+    for (auto& path : korFonts)
+    {
+        if (GetFileAttributesA(path) != INVALID_FILE_ATTRIBUTES)
+        {
+            io.Fonts->AddFontFromFileTTF(path, 16.0f, &cfg, ranges);
+            loaded = true;
+            break;
+        }
+    }
+    if (!loaded)
+        io.Fonts->AddFontDefault();
+}
+
+void GuiManager::RunGui()
+{
+    Initialize();
+    //if (!Initialize()) return -1;
+    SetupImGui();
+    MainLoop();
+    Cleanup();
+    //return 0;
+}
+
+void GuiManager::MainLoop()
+{
+    bool done = false;
+    while (!done)
+    {
+        MSG msg;
+        while (::PeekMessageA(&msg, nullptr, 0U, 0U, PM_REMOVE))
+        {
+            ::TranslateMessage(&msg);
+            ::DispatchMessageA(&msg);
+            if (msg.message == WM_QUIT) done = true;
+        }
+        if (done || _bStop) break;
+
+        // 최소화 중이면 렌더링 생략하고 대기
+        if (::IsIconic(_hWnd))
+        {
+            ::Sleep(100);
+            continue;
+        }
+
+        // 창이 가려진 경우 대기
+        if (_bSwapChainOccluded &&
+            _pSwapChain->Present(0, DXGI_PRESENT_TEST) == DXGI_STATUS_OCCLUDED)
+        {
+            ::Sleep(10);
+            continue;
+        }
+        _bSwapChainOccluded = FALSE;
+
+        // 리사이즈 처리
+        if (_uiResizeWidth != 0 && _uiResizeHeight != 0)
+        {
+            CleanupRenderTarget();
+            _pSwapChain->ResizeBuffers(0, _uiResizeWidth, _uiResizeHeight, DXGI_FORMAT_UNKNOWN, 0);
+            _uiResizeWidth = _uiResizeHeight = 0;
+            CreateRenderTarget();
+        }
+
+        ImGui_ImplDX11_NewFrame();
+        ImGui_ImplWin32_NewFrame();
+        ImGui::NewFrame();
+
+        RenderUI();
+        RenderFrame();
+    }
+}
+
+void GuiManager::RenderFrame()
+{
+    ImGui::Render();
+    const float clear[4] = { _vClearColor.x, _vClearColor.y, _vClearColor.z, _vClearColor.w };
+    _pd3dDeviceContext->OMSetRenderTargets(1, &_pMainRenderTargetView, nullptr);
+    _pd3dDeviceContext->ClearRenderTargetView(_pMainRenderTargetView, clear);
+    ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());
+    HRESULT hr = _pSwapChain->Present(1, 0);
+    _bSwapChainOccluded = (hr == DXGI_STATUS_OCCLUDED);
+}
+
+void GuiManager::Cleanup()
+{
+    ImGui_ImplDX11_Shutdown();
+    ImGui_ImplWin32_Shutdown();
+    ImGui::DestroyContext();
+    CleanupDeviceD3D();
+    ::DestroyWindow(_hWnd);
+    ::UnregisterClassA("GameServerGUI", GetModuleHandleA(nullptr));
+}
+
+//============================================================================================================
+// UI 렌더링
+//============================================================================================================
+
+void GuiManager::RenderUI()
+{
+    ImGuiIO& io = ImGui::GetIO();
+    ImGui::SetNextWindowPos(ImVec2(0, 0));
+    ImGui::SetNextWindowSize(io.DisplaySize);
+    ImGui::Begin("##Main", nullptr,
+        ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
+        ImGuiWindowFlags_NoMove     | ImGuiWindowFlags_NoScrollbar |
+        ImGuiWindowFlags_NoBringToFrontOnFocus);
+
+    if (ImGui::BeginTabBar("##Tabs"))
+    {
+        if (ImGui::BeginTabItem(u8"맵 정보"))   { RenderTabMapInfo();      ImGui::EndTabItem(); }
+ 
+        ImGui::EndTabBar();
+    }
+    ImGui::End();
+}
+
+//============================================================================================================
+// 탭1 - 맵 정보 시각화
+//============================================================================================================
+
+void GuiManager::RenderTabMapInfo()
+{
+    auto* pMapInfos = g_DataManager.GetMapData();
+    if (!pMapInfos || pMapInfos->empty())
+    {
+        ImGui::TextDisabled("No map data");
+        return;
+    }
+
+    static std::vector<std::pair<WORD, CMapInfo*>> s_MapList;
+    if (s_MapList.empty())
+        for (auto& kv : *pMapInfos)
+            s_MapList.emplace_back(kv.first, kv.second);
+
+    // Map select combo
+    {
+        char preview[32] = "None";
+        if (_i32SelectedMapIndex < (int)s_MapList.size())
+            sprintf_s(preview, "Map %d", (int)s_MapList[_i32SelectedMapIndex].first);
+        ImGui::SetNextItemWidth(160);
+        if (ImGui::BeginCombo("Map", preview))
+        {
+            for (int i = 0; i < (int)s_MapList.size(); ++i)
+            {
+                char label[32];
+                sprintf_s(label, "Map %d", (int)s_MapList[i].first);
+                if (ImGui::Selectable(label, _i32SelectedMapIndex == i))
+                {
+                    _i32SelectedMapIndex  = i;
+                    _vMapOffset           = ImVec2(0.0f, 0.0f);
+                    _dwSelectedCharUnique = 0;
+                }
+            }
+            ImGui::EndCombo();
+        }
+    }
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(150);
+    float prevZoom = _fMapZoom;
+    ImGui::SliderFloat("Zoom", &_fMapZoom, 0.5f, 8.0f, "%.1f");
+    ImGui::SameLine();
+    if (ImGui::SmallButton("Reset"))
+        _vMapOffset = ImVec2(0.0f, 0.0f);
+
+    if (_i32SelectedMapIndex >= (int)s_MapList.size()) return;
+    CMapInfo* pMapInfo = s_MapList[_i32SelectedMapIndex].second;
+    CGameMap* pMap     = g_MapManager.FindMapIndex(s_MapList[_i32SelectedMapIndex].first);
+    if (!pMap || !pMapInfo || pMapInfo->_i32MaxSize <= 0) return;
+
+    const int   mapSize  = pMapInfo->_i32MaxSize;
+    const float tileSize = _fMapZoom;
+
+    // Unit position collection 
+    struct UserPos { int x, y; DWORD dwAccunique;  DWORD charUnique; int level; };
+    struct NpcPos  { int x, y; };
+    static std::vector<UserPos> s_UserPositions;
+    static std::vector<NpcPos>  s_NpcPositions;
+  
+    // 맵 데이터는 1초에 1회만 갱신, 렌더링은 매 프레임 유지
+    static double s_LastUpdateTime = 0.0;
+    const  double now              = ImGui::GetTime();
+    if (now - s_LastUpdateTime >= 1.0 &&
+        TryEnterCriticalSection(&pMap->m_MonitToolLock))
+    {
+        s_LastUpdateTime = now;
+        s_UserPositions.clear();
+        s_NpcPositions.clear();
+
+        for (const auto& iter : pMap->m_UnitPos)
+        {
+            CUnit* pUnit = iter.second;
+            if (!pUnit) continue;                           
+
+            if (pUnit->GetUnitTYPE() == eUnitType::PC)
+            {
+                CUnitPC* pPC = static_cast<CUnitPC*>(pUnit);
+                if (!pPC) continue;                       
+
+                UserPos up = {};
+                up.x = pPC->m_X;
+                up.y = pPC->m_Y;
+                up.charUnique = pPC->GetCharacterUnique();
+                up.level = pPC->GetLevel();
+                up.dwAccunique = pPC->GetAccountUnique();
+                s_UserPositions.push_back(up);
+            }
+            else if (pUnit->GetUnitTYPE() == eUnitType::NPC)
+                s_NpcPositions.push_back({ pUnit->m_X, pUnit->m_Y });
+        }
+        LeaveCriticalSection(&pMap->m_MonitToolLock);
+    }
+
+    // Canvas
+    ImVec2 canvasPos  = ImGui::GetCursorScreenPos();
+    ImVec2 canvasSize = ImGui::GetContentRegionAvail();
+    canvasSize.y -= 24.0f;
+    if (canvasSize.x < 10 || canvasSize.y < 10) return;
+
+    const float totalMapW = mapSize * tileSize;
+    const float totalMapH = mapSize * tileSize;
+    if (prevZoom != _fMapZoom)
+    {
+        _vMapOffset.x = ImClamp(_vMapOffset.x, ImMin(-(totalMapW - canvasSize.x), 0.0f), 0.0f);
+        _vMapOffset.y = ImClamp(_vMapOffset.y, ImMin(-(totalMapH - canvasSize.y), 0.0f), 0.0f);
+    }
+
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    dl->AddRectFilled(canvasPos,
+        ImVec2(canvasPos.x + canvasSize.x, canvasPos.y + canvasSize.y),
+        IM_COL32(25, 25, 25, 255));
+    dl->AddRect(canvasPos,
+        ImVec2(canvasPos.x + canvasSize.x, canvasPos.y + canvasSize.y),
+        IM_COL32(80, 80, 80, 255));
+    dl->PushClipRect(canvasPos,
+        ImVec2(canvasPos.x + canvasSize.x, canvasPos.y + canvasSize.y), true);
+
+    if (!pMapInfo->m_MapData.tileInfo)
+    {
+        dl->PopClipRect();
+        ImGui::InvisibleButton("##mapcanvas", canvasSize);
+        ImGui::TextDisabled("tileInfo not loaded");
+        return;
+    }
+
+    // Visible tile range (performance optimization)
+    const int startX = ImMax(0, (int)(-_vMapOffset.x / tileSize));
+    const int startY = ImMax(0, (int)(-_vMapOffset.y / tileSize));
+    const int endX   = ImMin(mapSize, startX + (int)(canvasSize.x / tileSize) + 2);
+    const int endY   = ImMin(mapSize, startY + (int)(canvasSize.y / tileSize) + 2);
+
+    // Tile rendering
+    for (int y = startY; y < endY; ++y)
+        for (int x = startX; x < endX; ++x)
+        {
+            if (!pMapInfo->m_MapData.tileInfo[x]) continue;
+            const int tileType = pMapInfo->m_MapData.tileInfo[x][y].type;
+            if (tileType == MAP_TILE_TYPE::MAP_TILE_NOMAL) continue;
+            ImU32 col = IM_COL32(160, 50, 50, 210);
+            if (tileType >= MAP_TILE_TYPE::MAP_TILE_INWARP_0 &&
+                tileType <= MAP_TILE_TYPE::MAP_TILE_OUTWARP_9)
+                col = IM_COL32(80, 120, 220, 200);
+            else if (tileType == MAP_TILE_TYPE::MAP_TILE_PVP ||
+                     tileType == MAP_TILE_TYPE::MAP_TILE_CASTLE_PVP)
+                col = IM_COL32(220, 160, 40, 200);
+            const float px = canvasPos.x + x * tileSize + _vMapOffset.x;
+            const float py = canvasPos.y + y * tileSize + _vMapOffset.y;
+            dl->AddRectFilled(ImVec2(px, py), ImVec2(px + tileSize, py + tileSize), col);
+        }
+
+    // NPC dots (grey)
+    const float dotR = ImMax(2.0f, tileSize * 0.55f);
+    for (auto& dp : s_NpcPositions)
+    {
+        const float px = canvasPos.x + dp.x * tileSize + _vMapOffset.x;
+        const float py = canvasPos.y + dp.y * tileSize + _vMapOffset.y;
+        dl->AddCircleFilled(ImVec2(px, py), dotR, IM_COL32(200, 200, 200, 180));
+    }
+
+    // Player dots (green) + selected highlight ring
+    for (auto& up : s_UserPositions)
+    {
+        const float px = canvasPos.x + up.x * tileSize + _vMapOffset.x;
+        const float py = canvasPos.y + up.y * tileSize + _vMapOffset.y;
+        dl->AddCircleFilled(ImVec2(px, py), dotR, IM_COL32(60, 220, 60, 230));
+        if (up.charUnique == _dwSelectedCharUnique)
+            dl->AddCircle(ImVec2(px, py), dotR + 3.0f, IM_COL32(255, 220, 0, 255), 0, 2.0f);
+    }
+    dl->PopClipRect();
+
+    // Canvas input
+    ImGui::InvisibleButton("##mapcanvas", canvasSize);
+
+    if (ImGui::IsItemHovered())
+        ImGui::SetMouseCursor(ImGuiMouseCursor_Hand);
+
+    // Drag pan
+    if (ImGui::IsItemActive() && ImGui::IsMouseDragging(ImGuiMouseButton_Left, 0.0f))
+    {
+        ImGuiIO& io = ImGui::GetIO();
+        _vMapOffset.x += io.MouseDelta.x;
+        _vMapOffset.y += io.MouseDelta.y;
+    }
+
+    // Click: select nearest player dot
+    if (ImGui::IsItemClicked(ImGuiMouseButton_Left))
+    {
+        ImVec2 mousePos = ImGui::GetMousePos();
+        float  bestDist = dotR * 4.0f;
+        DWORD  bestUniq = 0;
+        for (auto& up : s_UserPositions)
+        {
+            const float px = canvasPos.x + up.x * tileSize + _vMapOffset.x;
+            const float py = canvasPos.y + up.y * tileSize + _vMapOffset.y;
+            const float dx = mousePos.x - px;
+            const float dy = mousePos.y - py;
+            const float dist = sqrtf(dx * dx + dy * dy);
+            if (dist < bestDist) { bestDist = dist; bestUniq = up.charUnique; }
+        }
+        _dwSelectedCharUnique = bestUniq;
+    }
+
+    // Offset clamp
+    if (totalMapW > canvasSize.x)
+        _vMapOffset.x = ImClamp(_vMapOffset.x, -(totalMapW - canvasSize.x), 0.0f);
+    else _vMapOffset.x = 0.0f;
+    if (totalMapH > canvasSize.y)
+        _vMapOffset.y = ImClamp(_vMapOffset.y, -(totalMapH - canvasSize.y), 0.0f);
+    else _vMapOffset.y = 0.0f;
+
+    // Status bar
+    const int viewX = (int)(-_vMapOffset.x / tileSize);
+    const int viewY = (int)(-_vMapOffset.y / tileSize);
+    ImGui::Text("Map User: %d | Total User : %d  |  NPC: %d  |  ",
+        
+        (int)s_UserPositions.size(),g_GameManager.mUserManager.m_pUsers.size(), (int)s_NpcPositions.size());
+
+    // ── Character info popup (ForegroundDrawList = always on top) ────
+    if (_dwSelectedCharUnique != 0)
+    {
+        const UserPos* pSel = nullptr;
+        for (auto& up : s_UserPositions)
+            if (up.charUnique == _dwSelectedCharUnique) { pSel = &up; break; }
+
+        if (pSel)
+        {
+            const float popW  = 200.0f;
+            const float popH  =  105.0f;
+            const float dotPx = canvasPos.x + pSel->x * tileSize + _vMapOffset.x;
+            const float dotPy = canvasPos.y + pSel->y * tileSize + _vMapOffset.y;
+            float popX = dotPx + dotR + 8.0f;
+            float popY = dotPy - popH * 0.5f;
+            popX = ImClamp(popX, canvasPos.x + 4.0f, canvasPos.x + canvasSize.x - popW - 4.0f);
+            popY = ImClamp(popY, canvasPos.y + 4.0f, canvasPos.y + canvasSize.y - popH - 4.0f);
+
+            ImDrawList* fg = ImGui::GetForegroundDrawList();
+            ImFont*     ft = ImGui::GetFont();
+            const float fs = ImGui::GetFontSize();
+
+            // Background + border
+            fg->AddRectFilled(ImVec2(popX, popY), ImVec2(popX + popW, popY + popH),
+                IM_COL32(28, 28, 28, 240), 4.0f);
+            fg->AddRect(ImVec2(popX, popY), ImVec2(popX + popW, popY + popH),
+                IM_COL32(80, 200, 80, 220), 4.0f);
+
+            // Connector line: dot -> popup
+            fg->AddLine(ImVec2(dotPx, dotPy),
+                ImVec2(popX, popY + popH * 0.5f),
+                IM_COL32(255, 220, 0, 100));
+
+            // Title
+            float ty = popY + 6.0f;
+            fg->AddText(ft, fs, ImVec2(popX + 8.0f, ty),
+                IM_COL32(80, 220, 80, 255), "[ Char Info ]");
+            ty += fs + 2.0f;
+
+            // Separator
+            fg->AddLine(ImVec2(popX + 4.0f, ty), ImVec2(popX + popW - 4.0f, ty),
+                IM_COL32(70, 70, 70, 220));
+            ty += 4.0f;
+
+            // Content rows
+            char buf[64];
+            sprintf_s(buf, "Acc : %u", pSel->dwAccunique);
+            fg->AddText(ft, fs, ImVec2(popX + 8.0f, ty), IM_COL32(220, 220, 220, 255), buf);
+            ty += fs + 2.0f;
+
+            sprintf_s(buf, "CharUnique : %u", pSel->charUnique);
+            fg->AddText(ft, fs, ImVec2(popX + 8.0f, ty), IM_COL32(220, 220, 220, 255), buf);
+            ty += fs + 2.0f;
+
+            sprintf_s(buf, "Level  : %d", pSel->level);
+            fg->AddText(ft, fs, ImVec2(popX + 8.0f, ty), IM_COL32(220, 220, 220, 255), buf);
+            ty += fs + 2.0f;
+
+            sprintf_s(buf, "Pos    : (%d, %d)", pSel->x, pSel->y);
+            fg->AddText(ft, fs, ImVec2(popX + 8.0f, ty), IM_COL32(220, 220, 220, 255), buf);
+
+            // X close button
+            const float bx = popX + popW - 20.0f;
+            const float by = popY + 5.0f;
+            const float bw = 15.0f, bh = 15.0f;
+            const bool  hov = ImGui::IsMouseHoveringRect(
+                ImVec2(bx, by), ImVec2(bx + bw, by + bh));
+            fg->AddRectFilled(ImVec2(bx, by), ImVec2(bx + bw, by + bh),
+                hov ? IM_COL32(200, 60, 60, 230) : IM_COL32(100, 40, 40, 200), 2.0f);
+            fg->AddText(ft, fs, ImVec2(bx + 3.0f, by + 1.0f),
+                IM_COL32(255, 255, 255, 255), "X");
+            if (hov && ImGui::IsMouseClicked(ImGuiMouseButton_Left))
+                _dwSelectedCharUnique = 0;
+        }
+        else { _dwSelectedCharUnique = 0; }
+    }
+}
+
+
+```
+
+</details>
