@@ -1519,5 +1519,5 @@ void GuiManager::RenderTabMapInfo()
 
 
 ```
-
 </details>
+- Normal Map 유저 분포 확인 기능 및 1인 입장 가능한 Instance Map 역시 활성화된 맵들을 추적할 수 있게되었다.
