@@ -810,7 +810,7 @@ exit /b
 
 
 ### 4. Unit 추적 툴
-게임서버 Unit들을 추적하고 해당 객체가 하는 행동을 추적하기 위한 툴. imgui 라이브러리를 활용하여 다른 스래드에서 시각화 하였다.
+게임서버 Unit들을 추적하고 해당 객체가 하는 행동을 추적하기 위한 툴. imgui 라이브러리를 활용하여 멀티스레드로 구현하였다. 유저,몬스터 위치 인스턴스맵 할당을 할때 TryLock을 사용해 게임서버에 영향이 없게 만들었다.
 
 <img width="640" height="382" alt="image" src="https://github.com/user-attachments/assets/4c118645-7903-41ab-8dcd-917a44219389" />
 
