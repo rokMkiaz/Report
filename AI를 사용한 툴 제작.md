@@ -810,7 +810,7 @@ exit /b
 
 
 ### 4. Unit 추적 툴
-게임서버 Unit들을 추적하고 해당 객체가 하는 행동을 추적하기 위한 툴. imgui 라이브러리를 활용하여 멀티스레드로 구현하였다. 유저,몬스터 위치 인스턴스맵 할당을 할때 TryLock을 사용해 게임서버에 영향이 없게 만들었다.
+게임서버 Unit들을 추적하고 해당 객체가 하는 행동을 추적하기 위한 툴. imgui 라이브러리를 활용하여 멀티스레드로 구현하였다. 
 
 <img width="640" height="382" alt="image" src="https://github.com/user-attachments/assets/4c118645-7903-41ab-8dcd-917a44219389" />
 
@@ -1525,3 +1525,4 @@ void GuiManager::RenderTabMapInfo()
 
 - Normal Map 유저 분포 확인 기능 및 1인 입장 가능한 Instance Map 역시 활성화된 맵들을 추적할 수 있게되었다.
 - 유저 위치 추적기능도 있어서 해당 유닛의 Charunique를 검색하면 어느 맵에 있는지 추적 가능
+- 화면을 30Fps로 설정하였고, 업데이트 실패해도 큰 문제가 없으므로 TryLock을 사용해 유저,몬스터 위치, 인스턴스맵 할당을 할때 게임서버에 영향이 없게 만들었다.
